@@ -1,7 +1,14 @@
 # Omnigent Native — Remaining Work Scope
 
-Companion to `omnigent-native-progress.md` (what's done: M1 + M2, live-validated;
-74 unit cases). This scopes everything left.
+> **STATUS (updated): ALL milestones landed.** M1–M6 + Track C are implemented and
+> unit-tested (113 cases, 0 fails) and the M3/M4/M6 wiring is live-validated. See
+> `omnigent-native-progress.md` for the per-milestone summary and the manual GUI
+> checklist. The tables below are the ORIGINAL scoping and are kept for reference;
+> items still explicitly deferred: **M5 inbox/task/timer meta rows** (low value),
+> **M6 ACP migration** (high-risk, separate workstream), and **GUI eyeball checks**
+> (tree-sitter render tests). Everything else in the tables is done.
+
+Companion to `omnigent-native-progress.md`. This scopes the work (now complete).
 
 **Legend** — Effort: **S** localized edit / one function · **M** new module or
 multi-file · **L** new subsystem. Where: **[P]** plugin (codecompanion.nvim) ·
