@@ -89,6 +89,74 @@ T["background failure surfaces a warning and clears partial"] = function()
   h.eq(#warned, 1)
 end
 
+T["restores the input anchor after a background turn completes"] = function()
+  -- The bug: after out-of-band background writes, chat.header_line is stale and
+  -- there's no trailing ## Me, so the user's next submit is dropped. The observer
+  -- must call reset_input_anchor() once the turn finishes.
+  local obs, chat = new_observer()
+  obs:handle_update({ kind = "message_delta", response_id = "__live__", delta = "hi", text = "hi" })
+  h.eq(chat.input_anchor_resets, 0) -- not while mid-stream
+  obs:handle_update({ kind = "turn_completed", response_id = "resp_x" })
+  h.is_true(chat.input_anchor_resets >= 1) -- restored on completion
+end
+
+T["restores the input anchor after a standalone note (no turn boundary)"] = function()
+  local obs, chat = new_observer()
+  -- A tool-call row with no open turn must still leave a usable input anchor.
+  obs:handle_update({ kind = "item_committed", item_type = "function_call", item = { name = "sys_read_inbox" } })
+  h.is_true(chat.input_anchor_resets >= 1)
+end
+
+T["system-injected [System:...] user items render as a note, not a ## Me turn"] = function()
+  local obs, chat = new_observer()
+  obs:handle_update({
+    kind = "item_committed",
+    item_type = "message",
+    role = "user",
+    text = "[System: sub-agent claude/who-are-you finished (completed) — 1 result waiting]",
+    item_id = "msg_sys",
+  })
+  -- No user (## Me) buffer row, and NOT added to the transcript as a user message.
+  local user_rows = vim.tbl_filter(function(b)
+    return b.type == "user_msg"
+  end, chat.buf_calls)
+  h.eq(#user_rows, 0)
+  local user_msgs = vim.tbl_filter(function(m)
+    return m.role == "user"
+  end, chat.messages)
+  h.eq(#user_msgs, 0)
+  -- It IS surfaced as a compact note so the user still has visibility.
+  local notes = vim.tbl_filter(function(b)
+    return b.type == "sys_msg" and b.content:find("sub-agent", 1, true) ~= nil
+  end, chat.buf_calls)
+  h.eq(#notes, 1)
+end
+
+T["genuine external user message still renders as a user turn"] = function()
+  local obs, chat = new_observer()
+  obs:handle_update({
+    kind = "item_committed",
+    item_type = "message",
+    role = "user",
+    text = "poke from another client",
+    item_id = "msg_u",
+  })
+  local user_rows = vim.tbl_filter(function(b)
+    return b.type == "user_msg"
+  end, chat.buf_calls)
+  h.eq(#user_rows, 1)
+end
+
+T["skips background rendering while the user is composing input"] = function()
+  local obs, chat = new_observer()
+  chat.pending_input = true -- user is mid-type
+  obs:handle_update({ kind = "message_delta", response_id = "__live__", delta = "hi", text = "hi" })
+  -- Nothing written to the buffer, and the input anchor is left untouched.
+  h.eq(#chat.buf_calls, 0)
+  h.eq(chat.input_anchor_resets, 0)
+  h.eq(obs:has_partial(), false)
+end
+
 T["fires ChatOmnigentWakeup and ChatOmnigentBackgroundTurn"] = function()
   local obs = select(1, new_observer())
   local seen = {}

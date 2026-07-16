@@ -125,12 +125,55 @@ function Observer:_finalize()
   })
 end
 
+---After out-of-band buffer writes (no foreground submit/done cycle ran),
+---`chat.header_line` is stale and there's no trailing `## Me` for the user's next
+---prompt. Restore the input anchor so the next submit is parsed and posted --
+---without this the message lands under the background section and is silently
+---dropped (the "injected in the wrong place + hang" bug). Only when no turn is
+---mid-stream and no foreground request is active. Idempotent: reset_input_anchor
+---won't stack a second `## Me` when one already trails.
+function Observer:_restore_input()
+  if self._cur ~= nil then
+    return -- a turn is mid-stream; don't break the section we're writing into
+  end
+  if self.chat.current_request then
+    return
+  end
+  if self.chat.reset_input_anchor then
+    self.chat:reset_input_anchor()
+  end
+end
+
+---Does this text look like an omnigent-injected system message (sub-agent / inbox
+---plumbing) rather than a real user turn? These arrive as role="user" items but
+---must NOT be rendered as `## Me` sections (they pollute the input buffer and make
+---`has_user_messages` true, defeating submit's "no messages" guard).
+---@param text any
+---@return boolean
+local function is_system_injected(text)
+  return type(text) == "string" and text:match("^%s*%[System:") ~= nil
+end
+
 ---Handle one normalised session update (only called when no foreground is bound).
 ---@param u CodeCompanion.Omnigent.Update
 function Observer:handle_update(u)
   local C = config.constants
   local MT = self.chat.MESSAGE_TYPES
   local k = u.kind
+
+  -- Never write into the buffer while the user is composing input: it would
+  -- clobber the trailing input section. Skip live rendering of the rendering
+  -- update kinds (the turn is still durable server-side and reconciles later).
+  local writes_buffer = k == "turn_started"
+    or k == "message_delta"
+    or k == "reasoning_delta"
+    or k == "item_committed"
+    or k == "child_session"
+    or k == "child_session_created"
+    or k == "policy_denied"
+  if writes_buffer and self.chat.has_pending_input and self.chat:has_pending_input() then
+    return
+  end
 
   if k == "turn_started" then
     self:_ensure_turn(u.response_id)
@@ -146,9 +189,19 @@ function Observer:handle_update(u)
     -- appear so the transcript stays coherent. Assistant text is already covered
     -- by the streamed deltas; tool calls get a compact marker.
     if u.item_type == "message" and u.role == "user" and type(u.text) == "string" and u.text ~= "" then
-      self.chat:add_buf_message({ role = C.USER_ROLE, content = u.text }, { type = MT.USER_MESSAGE })
-      if self.chat.add_message then
-        self.chat:add_message({ role = C.USER_ROLE, content = u.text }, { _meta = { sent = true } })
+      if is_system_injected(u.text) then
+        -- Omnigent plumbing (sub-agent/inbox notifications): show a compact note,
+        -- never a `## Me` turn or a transcript user message.
+        local note = vim.trim(u.text):gsub("%s+", " "):sub(1, 200)
+        self.chat:add_buf_message(
+          { role = C.LLM_ROLE, content = "\n> _" .. note .. "_\n" },
+          { type = MT.SYSTEM_MESSAGE or MT.LLM_MESSAGE }
+        )
+      else
+        self.chat:add_buf_message({ role = C.USER_ROLE, content = u.text }, { type = MT.USER_MESSAGE })
+        if self.chat.add_message then
+          self.chat:add_message({ role = C.USER_ROLE, content = u.text }, { _meta = { sent = true } })
+        end
       end
     elseif u.item_type == "function_call" then
       local render = require("codecompanion.interactions.chat.omnigent.render")
@@ -199,6 +252,18 @@ function Observer:handle_update(u)
     end
   end
   -- other: intentionally not rendered in the background stream.
+
+  -- Restore the user input anchor after any buffer-writing OR turn-ending update,
+  -- unless a turn is still mid-stream (restored once it completes). This is what
+  -- keeps the user's next submit parseable after out-of-band background rendering.
+  local ends_turn = k == "turn_completed"
+    or k == "turn_failed"
+    or k == "error"
+    or k == "interrupted"
+    or k == "turn_cancelled"
+  if writes_buffer or ends_turn then
+    self:_restore_input()
+  end
 end
 
 ---Fire a transport-neutral usage event (mirrors the foreground handler) so the

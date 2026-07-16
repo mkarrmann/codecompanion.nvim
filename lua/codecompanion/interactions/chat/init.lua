@@ -1952,6 +1952,36 @@ function Chat:ready_for_input(opts)
   self:reset()
 end
 
+---True if the current input section holds unsent user text (the user is composing).
+---Used to avoid clobbering in-progress input with out-of-band (background) writes.
+---@return boolean
+function Chat:has_pending_input()
+  local ok, msg = pcall(parser.messages, self, self.header_line)
+  if not ok then
+    return false
+  end
+  return msg ~= nil and type(msg.content) == "string" and vim.trim(msg.content) ~= ""
+end
+
+---Re-establish a fresh user input section (`## Me`) + `header_line` after
+---out-of-band buffer writes (e.g. omnigent background/wakeup turns). The next
+---submit parses the user's message from `header_line`, so anything written to the
+---buffer outside the foreground submit/done cycle desyncs it; this fixes the
+---anchor. Lighter than `ready_for_input()`: no cycle bump, `on_ready` dispatch, or
+---`reset()` -- it only restores the input boundary.
+---@return nil
+function Chat:reset_input_anchor()
+  if self._last_role ~= config.constants.USER_ROLE then
+    self:add_buf_message({ role = config.constants.USER_ROLE, content = "" })
+  end
+  self.header_line = (self.builder.state.current_header_line or 0) + 1
+  -- Leave the buffer input-ready (mirrors ready_for_input -> reset). Without this a
+  -- background turn could leave it locked, blocking the next prompt.
+  pcall(function()
+    self.ui:unlock_buf()
+  end)
+end
+
 ---When a request has finished, reset the chat buffer
 ---@return nil
 function Chat:reset()

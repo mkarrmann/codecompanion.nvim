@@ -66,6 +66,10 @@ function M.mock_chat(adapter)
     },
     buf_calls = {},
     msg_calls = {},
+    current_request = nil,
+    -- Test knob: set true to simulate the user mid-composing (guards background writes).
+    pending_input = false,
+    input_anchor_resets = 0,
     add_buf_message = function(self, msg, opts)
       table.insert(self.buf_calls, { role = msg.role, content = msg.content, type = opts and opts.type })
     end,
@@ -73,6 +77,12 @@ function M.mock_chat(adapter)
       msg._meta = (opts and opts._meta) or msg._meta
       table.insert(self.messages, msg)
       table.insert(self.msg_calls, { role = msg.role, content = msg.content, meta = msg._meta })
+    end,
+    has_pending_input = function(self)
+      return self.pending_input == true
+    end,
+    reset_input_anchor = function(self)
+      self.input_anchor_resets = self.input_anchor_resets + 1
     end,
     update_metadata = function() end,
   }
