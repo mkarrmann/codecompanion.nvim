@@ -323,6 +323,10 @@ end
 function OmnigentHandler:_render_item(u)
   local MT = self.chat.MESSAGE_TYPES
   if u.item_type == "function_call" then
+    -- Surface the committed tool call for external consumers (diff tracking, task
+    -- attribution): `item.arguments` (a JSON string of the tool params) is the
+    -- only place a server-side tool's file paths appear.
+    utils.fire("OmnigentToolCall", { bufnr = self.chat.bufnr, item = u.item or { name = u.tool_name } })
     self.chat:add_buf_message(
       { role = config.constants.LLM_ROLE, content = render.tool_call_line(u.item or { name = u.tool_name }) },
       { type = MT.SYSTEM_MESSAGE or MT.LLM_MESSAGE }

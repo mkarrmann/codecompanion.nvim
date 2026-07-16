@@ -199,6 +199,53 @@ T["fires RequestStarted/Finished so the input queue advances"] = function()
   h.eq(finished[1].data.status, "success")
 end
 
+T["fires OmnigentToolCall with the item for a committed function_call"] = function()
+  local chat, handler, cap = setup({})
+  local seen = {}
+  local group = vim.api.nvim_create_augroup("omni_test_toolcall", { clear = true })
+  vim.api.nvim_create_autocmd("User", {
+    group = group,
+    pattern = "CodeCompanionOmnigentToolCall",
+    callback = function(a)
+      seen[#seen + 1] = a.data
+    end,
+  })
+
+  handler:submit({})
+  cap.drive.on_stdout(
+    "event: response.output_item.done\n"
+      .. 'data: {"type":"response.output_item.done","item":{"id":"fc_1","type":"function_call",'
+      .. '"name":"Edit","arguments":"{\\"file_path\\": \\"/tmp/x.lua\\"}","call_id":"toolu_1"}}\n\n'
+  )
+  vim.api.nvim_del_augroup_by_id(group)
+
+  -- The committed tool call is surfaced with its raw item, so a consumer (the
+  -- diff tracker) can decode `arguments` for the edited path.
+  h.eq(#seen, 1)
+  h.eq(seen[1].bufnr, 0)
+  h.eq(seen[1].item.name, "Edit")
+  h.is_true(seen[1].item.arguments:find("/tmp/x.lua", 1, true) ~= nil)
+end
+
+T["does NOT fire OmnigentToolCall for a committed message item"] = function()
+  local chat, handler, cap = setup({})
+  local seen = 0
+  local group = vim.api.nvim_create_augroup("omni_test_toolcall_msg", { clear = true })
+  vim.api.nvim_create_autocmd("User", {
+    group = group,
+    pattern = "CodeCompanionOmnigentToolCall",
+    callback = function()
+      seen = seen + 1
+    end,
+  })
+
+  handler:submit({})
+  cap.drive.on_stdout(read_raw("sse-clean-full.txt")) -- output_item.done is a message
+  vim.api.nvim_del_augroup_by_id(group)
+
+  h.eq(seen, 0)
+end
+
 T["detaches from the session on completion (no background leak)"] = function()
   local chat, handler, cap = setup({})
   handler:submit({})
