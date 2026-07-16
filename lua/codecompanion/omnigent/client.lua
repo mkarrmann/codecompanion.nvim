@@ -167,7 +167,10 @@ function Client:request(method, path, opts)
   local raw = resp.body
   local decoded
   if type(raw) == "string" and raw ~= "" then
-    local dok, d = pcall(vim.json.decode, raw)
+    -- Decode JSON null as absent (nil), not vim.NIL. vim.NIL is truthy, so it
+    -- would poison `field or default` chains (e.g. session.llm_model=null →
+    -- vim.NIL model) and break `not body.has_more`-style pagination guards.
+    local dok, d = pcall(vim.json.decode, raw, { luanil = { object = true } })
     if dok then
       decoded = d
     end

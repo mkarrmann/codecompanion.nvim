@@ -81,7 +81,10 @@ function M.decode(record)
   if raw == "[DONE]" then
     return { type = record.event or "done", json = nil, raw = raw, done = true }
   end
-  local ok, decoded = pcall(vim.json.decode, raw)
+  -- Decode JSON null as absent (nil), not vim.NIL: vim.NIL is truthy, which would
+  -- poison every `field or default` chain downstream (e.g. an id-less delta's
+  -- `message_id: null` -> vim.NIL instead of the "__live__" fallback).
+  local ok, decoded = pcall(vim.json.decode, raw, { luanil = { object = true } })
   if not ok or type(decoded) ~= "table" then
     return { type = record.event, json = nil, raw = raw, done = false }
   end

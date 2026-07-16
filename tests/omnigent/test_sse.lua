@@ -27,6 +27,18 @@ local function parse_all(blob)
   return events
 end
 
+T["decodes JSON null as nil, not vim.NIL"] = function()
+  local ev = parse_all(
+    'event: response.output_text.delta\n'
+      .. 'data: {"type":"response.output_text.delta","delta":"hi","message_id":null,"index":null}\n\n'
+  )[1]
+  h.eq(ev.type, "response.output_text.delta")
+  h.eq(ev.json.delta, "hi")
+  -- null must be absent (nil), so `j.message_id or "__live__"` falls back cleanly.
+  h.eq(ev.json.message_id, nil)
+  h.eq(ev.json.message_id or "__live__", "__live__")
+end
+
 T["parses the full clean stream fixture"] = function()
   local events = parse_all(fixture("sse-clean-full.txt"))
   h.eq(#events, 13)
@@ -49,9 +61,11 @@ T["assistant text deltas decode with their delta payloads"] = function()
   h.eq(#deltas, 2)
   h.eq(deltas[1].json.delta, "done")
   h.eq(deltas[2].json.delta, ".")
-  -- Confirmed contract: deltas carry no ids (content-dedup is required).
-  h.eq(deltas[1].json.message_id, vim.NIL)
-  h.eq(deltas[1].json.index, vim.NIL)
+  -- Confirmed contract: deltas carry no ids (content-dedup is required). JSON
+  -- null now decodes to nil (absent), not vim.NIL, so the `or "__live__"` fallback
+  -- works and nulls can't poison downstream `field or default` chains.
+  h.eq(deltas[1].json.message_id, nil)
+  h.eq(deltas[1].json.index, nil)
 end
 
 T["output_item.done carries the durable committed item"] = function()
