@@ -2157,7 +2157,15 @@ function Chat.toggle(args)
     -- Adapter resolution from params
     if args.params and args.params.adapter then
       local adapter_name = args.params.adapter
-      local adapter = config.adapters.http[adapter_name] or config.adapters.acp[adapter_name]
+      -- Route by family. omnigent adapters (config.adapters.omnigent) are factory
+      -- functions adapter_type() can't classify from the value, so pass the NAME
+      -- and let resolve() route it; http/acp keep their existing value pre-lookup.
+      local adapter
+      if config.adapters.omnigent and config.adapters.omnigent[adapter_name] then
+        adapter = adapter_name
+      else
+        adapter = config.adapters.http[adapter_name] or config.adapters.acp[adapter_name]
+      end
       adapter = require("codecompanion.adapters").resolve(adapter)
       if args.params.model then
         adapter.schema.model.default = args.params.model
