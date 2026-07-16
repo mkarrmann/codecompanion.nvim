@@ -1,0 +1,500 @@
+{
+  "ServerStreamEvent": {
+    "count": 51,
+    "kind": "discriminated-union (Annotated[..., Field(discriminator='type')])",
+    "variants": {
+      "browser.action_request": {
+        "class": "BrowserActionRequestEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "action_id",
+          "action",
+          "args"
+        ]
+      },
+      "response.cancelled": {
+        "class": "CancelledEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "response"
+        ]
+      },
+      "response.client_task.cancel": {
+        "class": "ClientTaskCancelEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "task_id",
+          "call_id"
+        ]
+      },
+      "response.compaction.completed": {
+        "class": "CompactionCompletedEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "total_tokens",
+          "summary",
+          "summary_model",
+          "compacted_messages"
+        ]
+      },
+      "response.compaction.failed": {
+        "class": "CompactionFailedEvent",
+        "fields": [
+          "sequence_number",
+          "type"
+        ]
+      },
+      "response.compaction.in_progress": {
+        "class": "CompactionInProgressEvent",
+        "fields": [
+          "sequence_number",
+          "type"
+        ]
+      },
+      "response.completed": {
+        "class": "CompletedEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "response"
+        ]
+      },
+      "response.created": {
+        "class": "CreatedEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "response"
+        ]
+      },
+      "response.elicitation_request": {
+        "class": "ElicitationRequestEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "elicitation_id",
+          "method",
+          "params"
+        ]
+      },
+      "response.elicitation_resolved": {
+        "class": "ElicitationResolvedEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "elicitation_id"
+        ]
+      },
+      "response.error": {
+        "class": "ErrorEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "source",
+          "tool_name",
+          "error"
+        ]
+      },
+      "response.failed": {
+        "class": "FailedEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "response"
+        ]
+      },
+      "response.heartbeat": {
+        "class": "HeartbeatEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "server_time",
+          "last_event_seq"
+        ]
+      },
+      "response.in_progress": {
+        "class": "InProgressEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "response"
+        ]
+      },
+      "response.incomplete": {
+        "class": "IncompleteEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "response"
+        ]
+      },
+      "response.output_file.done": {
+        "class": "OutputFileDoneEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "file_id",
+          "filename",
+          "content_type"
+        ]
+      },
+      "response.output_item.done": {
+        "class": "OutputItemDoneEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "item"
+        ]
+      },
+      "response.output_text.delta": {
+        "class": "OutputTextDeltaEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "delta",
+          "message_id",
+          "index",
+          "final"
+        ]
+      },
+      "response.policy_denied": {
+        "class": "PolicyDeniedEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "conversation_id",
+          "reason",
+          "phase"
+        ]
+      },
+      "response.queued": {
+        "class": "QueuedEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "response"
+        ]
+      },
+      "response.reasoning.started": {
+        "class": "ReasoningStartedEvent",
+        "fields": [
+          "sequence_number",
+          "type"
+        ]
+      },
+      "response.reasoning_summary_text.delta": {
+        "class": "ReasoningSummaryTextDeltaEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "delta"
+        ]
+      },
+      "response.reasoning_text.delta": {
+        "class": "ReasoningTextDeltaEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "delta"
+        ]
+      },
+      "response.retry": {
+        "class": "RetryEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "source",
+          "tool_name",
+          "attempt",
+          "max_attempts",
+          "delay_seconds",
+          "error"
+        ]
+      },
+      "session.agent_changed": {
+        "class": "SessionAgentChangedEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "conversation_id",
+          "agent_id",
+          "agent_name"
+        ]
+      },
+      "session.changed_files.invalidated": {
+        "class": "SessionChangedFilesInvalidatedEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "session_id",
+          "environment_id"
+        ]
+      },
+      "session.child_session.updated": {
+        "class": "SessionChildSessionUpdatedEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "conversation_id",
+          "child_session_id",
+          "child"
+        ]
+      },
+      "session.collaboration_mode": {
+        "class": "SessionCollaborationModeEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "conversation_id",
+          "mode"
+        ]
+      },
+      "session.created": {
+        "class": "SessionCreatedEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "conversation_id",
+          "child_session_id",
+          "agent_id",
+          "parent_session_id"
+        ]
+      },
+      "session.heartbeat": {
+        "class": "SessionHeartbeatEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "server_time"
+        ]
+      },
+      "session.input.consumed": {
+        "class": "SessionInputConsumedEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "data"
+        ]
+      },
+      "session.interrupted": {
+        "class": "SessionInterruptedEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "data"
+        ]
+      },
+      "session.mcp_startup": {
+        "class": "SessionMcpStartupEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "conversation_id",
+          "servers"
+        ]
+      },
+      "session.model": {
+        "class": "SessionModelEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "conversation_id",
+          "model"
+        ]
+      },
+      "session.model_options": {
+        "class": "SessionModelOptionsEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "conversation_id"
+        ]
+      },
+      "session.presence": {
+        "class": "SessionPresenceEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "conversation_id",
+          "viewers"
+        ]
+      },
+      "session.reasoning_effort": {
+        "class": "SessionReasoningEffortEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "conversation_id",
+          "reasoning_effort"
+        ]
+      },
+      "session.resource.created": {
+        "class": "SessionResourceCreatedEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "resource"
+        ]
+      },
+      "session.resource.deleted": {
+        "class": "SessionResourceDeletedEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "resource_id",
+          "resource_type",
+          "session_id"
+        ]
+      },
+      "session.sandbox_status": {
+        "class": "SessionSandboxStatusEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "conversation_id",
+          "stage",
+          "error"
+        ]
+      },
+      "session.skills": {
+        "class": "SessionSkillsEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "conversation_id"
+        ]
+      },
+      "session.status": {
+        "class": "SessionStatusEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "conversation_id",
+          "status",
+          "response_id",
+          "error",
+          "background_task_count"
+        ]
+      },
+      "session.superseded": {
+        "class": "SessionSupersededEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "conversation_id",
+          "target_conversation_id",
+          "reason"
+        ]
+      },
+      "session.terminal.activity": {
+        "class": "SessionTerminalActivityEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "session_id",
+          "terminal_id"
+        ]
+      },
+      "session.terminal_pending": {
+        "class": "SessionTerminalPendingEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "conversation_id",
+          "pending"
+        ]
+      },
+      "session.todos": {
+        "class": "SessionTodosEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "conversation_id",
+          "todos"
+        ]
+      },
+      "session.usage": {
+        "class": "SessionUsageEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "conversation_id",
+          "context_tokens",
+          "context_window",
+          "total_cost_usd",
+          "usage_by_model"
+        ]
+      },
+      "turn.cancelled": {
+        "class": "TurnCancelledEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "session_id"
+        ]
+      },
+      "turn.completed": {
+        "class": "TurnCompletedEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "session_id"
+        ]
+      },
+      "turn.failed": {
+        "class": "TurnFailedEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "session_id",
+          "error"
+        ]
+      },
+      "turn.started": {
+        "class": "TurnStartedEvent",
+        "fields": [
+          "sequence_number",
+          "type",
+          "session_id"
+        ]
+      }
+    }
+  },
+  "SessionEventInput": {
+    "kind": "NOT a discriminated union. Single flat pydantic model with fields {type: str, data: dict[str,Any]={}, model_override: str|None, tools: list[dict]|None}. The route layer validates data shape per type value.",
+    "known_wire_type_values": [
+      "message",
+      "function_call",
+      "function_call_output",
+      "compaction",
+      "interrupt",
+      "approval",
+      "stop_session",
+      "external_session_interrupted"
+    ],
+    "model_fields": [
+      "type",
+      "data",
+      "model_override",
+      "tools"
+    ],
+    "payload_examples": {
+      "interrupt": {},
+      "message": {
+        "content": [
+          {
+            "text": "...",
+            "type": "input_text"
+          }
+        ],
+        "role": "user"
+      }
+    }
+  },
+  "_note": "Distilled from omnigent source (omnigent/server/schemas.py) via .venv introspection. The PUBLISHED openapi.json does NOT contain these unions: the POST /v1/sessions/{id}/events route is hidden (include_in_schema=False) and the GET /v1/sessions/{id}/stream route is present in paths but returns text/event-stream with NO typed response schema. So event shapes are unavailable to any openapi-driven codegen.",
+  "server_version": "0.6.0.dev0"
+}

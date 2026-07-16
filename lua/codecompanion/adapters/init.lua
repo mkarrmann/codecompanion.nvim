@@ -18,6 +18,9 @@ local function adapter_type(adapter)
   -- Check by name (for tables like { name = "claude_code", model = "opus" })
   local name = type(adapter) == "string" and adapter or (type(adapter) == "table" and adapter.name)
   if name then
+    if config.adapters.omnigent and config.adapters.omnigent[name] then
+      return "omnigent"
+    end
     if config.adapters.acp and config.adapters.acp[name] then
       return "acp"
     end
@@ -35,7 +38,11 @@ end
 ---@param opts? table
 ---@return CodeCompanion.ACPAdapter|CodeCompanion.HTTPAdapter
 function M.resolve(adapter, opts)
-  if adapter_type(adapter) == "acp" then
+  local t = adapter_type(adapter)
+  if t == "omnigent" then
+    return require("codecompanion.adapters.omnigent").resolve(adapter, opts)
+  end
+  if t == "acp" then
     return require("codecompanion.adapters.acp").resolve(adapter, opts)
   end
   return require("codecompanion.adapters.http").resolve(adapter, opts)
@@ -49,7 +56,11 @@ function M.resolved(adapter)
     return false
   end
 
-  if adapter_type(adapter) == "acp" then
+  local t = adapter_type(adapter)
+  if t == "omnigent" then
+    return require("codecompanion.adapters.omnigent").resolved(adapter)
+  end
+  if t == "acp" then
     return require("codecompanion.adapters.acp").resolved(adapter)
   end
   return require("codecompanion.adapters.http").resolved(adapter)
@@ -60,7 +71,11 @@ end
 ---@param opts? table
 ---@return CodeCompanion.ACPAdapter|CodeCompanion.HTTPAdapter
 function M.extend(adapter, opts)
-  if adapter_type(adapter) == "acp" then
+  local t = adapter_type(adapter)
+  if t == "omnigent" then
+    return require("codecompanion.adapters.omnigent").extend(adapter, opts)
+  end
+  if t == "acp" then
     return require("codecompanion.adapters.acp").extend(adapter, opts)
   end
   return require("codecompanion.adapters.http").extend(adapter, opts)
@@ -70,7 +85,11 @@ end
 ---@param adapter string|table
 ---@return table
 function M.make_safe(adapter)
-  if adapter_type(adapter) == "acp" then
+  local t = adapter_type(adapter)
+  if t == "omnigent" then
+    return require("codecompanion.adapters.omnigent").make_safe(adapter)
+  end
+  if t == "acp" then
     return require("codecompanion.adapters.acp").make_safe(adapter)
   end
   return require("codecompanion.adapters.http").make_safe(adapter)
@@ -80,7 +99,11 @@ end
 ---@param args { adapter: CodeCompanion.HTTPAdapter|CodeCompanion.ACPAdapter, acp_connection?: CodeCompanion.ACP.Connection, model?: string }
 ---@return CodeCompanion.HTTPAdapter
 function M.set_model(args)
-  if adapter_type(args.adapter) == "acp" then
+  local t = adapter_type(args.adapter)
+  if t == "omnigent" then
+    return require("codecompanion.adapters.omnigent").set_model(args)
+  end
+  if t == "acp" then
     return require("codecompanion.adapters.acp").set_model(args)
   end
   return require("codecompanion.adapters.http").set_model(args)

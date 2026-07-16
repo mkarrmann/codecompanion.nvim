@@ -1,0 +1,42 @@
+event: session.heartbeat
+data: {"sequence_number": null, "type": "session.heartbeat", "server_time": null}
+
+event: session.resource.created
+data: {"sequence_number": null, "type": "session.resource.created", "resource": {"id": "terminal_tui_main", "object": "session.resource", "type": "terminal", "session_id": "conv_5951aa1362a240898bf00e0caf21d809", "name": "tui:main", "metadata": {"terminal_name": "tui", "session_key": "main", "running": true, "tmux_socket": "/tmp/omnigent-terminal-cbwaqi32/tmux.sock", "tmux_target": "main", "terminal_transport": "control"}, "environment": "env_terminal_tui_main"}}
+
+event: session.changed_files.invalidated
+data: {"sequence_number": null, "type": "session.changed_files.invalidated", "session_id": "conv_5951aa1362a240898bf00e0caf21d809", "environment_id": "default"}
+
+event: session.presence
+data: {"sequence_number": null, "type": "session.presence", "conversation_id": "conv_5951aa1362a240898bf00e0caf21d809", "viewers": []}
+
+event: session.input.consumed
+data: {"sequence_number": null, "type": "session.input.consumed", "data": {"item_id": "msg_50995f71e06c4fd0a4b349b82b4a6251", "type": "message", "data": {"role": "user", "content": [{"type": "input_text", "text": "Reply with exactly the word: ok"}], "agent": null}, "created_by": null, "cleared_pending_id": null}}
+
+event: session.status
+data: {"sequence_number": null, "type": "session.status", "conversation_id": "conv_5951aa1362a240898bf00e0caf21d809", "status": "running", "response_id": null, "error": null, "background_task_count": null}
+
+event: response.in_progress
+data: {"sequence_number": 1, "type": "response.in_progress", "response": {"id": "resp_48ac4e4c2bca49979978588f", "object": "response", "status": "in_progress", "model": "polly", "created_at": 1784157631, "completed_at": null, "output": [], "background": false, "store": true, "usage": null, "previous_response_id": null, "conversation": null, "instructions": null, "reasoning": null, "error": null, "incomplete_details": null}}
+
+event: session.heartbeat
+data: {"sequence_number": null, "type": "session.heartbeat", "server_time": null}
+
+event: response.output_text.delta
+data: {"sequence_number": 3, "type": "response.output_text.delta", "delta": "ok", "message_id": null, "index": null, "final": null}
+
+event: response.heartbeat
+data: {"sequence_number": 4, "type": "response.heartbeat", "server_time": "2026-07-15T23:20:47Z", "last_event_seq": 3}
+
+event: response.output_item.done
+data: {"sequence_number": null, "type": "response.output_item.done", "item": {"id": "msg_4111817954ee44ef8bbc3075e881e1b7", "response_id": "resp_48ac4e4c2bca49979978588f", "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": "ok"}], "model": "polly"}}
+
+event: session.usage
+data: {"sequence_number": null, "type": "session.usage", "conversation_id": "conv_5951aa1362a240898bf00e0caf21d809", "context_tokens": null, "context_window": null, "total_cost_usd": null, "usage_by_model": {"claude-opus-4-7": {"input_tokens": 6, "output_tokens": 6, "total_tokens": 12, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 35803, "total_cost_usd": null}}}
+
+event: response.completed
+data: {"sequence_number": 6, "type": "response.completed", "response": {"id": "resp_48ac4e4c2bca49979978588f", "object": "response", "status": "completed", "model": "polly", "created_at": 1784157648, "completed_at": null, "output": [], "background": false, "store": true, "usage": {"input_tokens": 6, "output_tokens": 6, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 12, "context_tokens": 35809, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 35803, "model": "claude-opus-4-7", "cost_usd": null}, "previous_response_id": null, "conversation": null, "instructions": null, "reasoning": null, "error": null, "incomplete_details": null}}
+
+event: session.status
+data: {"sequence_number": null, "type": "session.status", "conversation_id": "conv_5951aa1362a240898bf00e0caf21d809", "status": "idle", "response_id": null, "error": null, "background_task_count": null}
+

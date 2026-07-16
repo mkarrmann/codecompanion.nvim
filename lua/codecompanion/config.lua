@@ -56,6 +56,13 @@ local defaults = {
         show_presets = true,
       },
     },
+    omnigent = {
+      omnigent = "default", -- Generic omnigent adapter (adapters/omnigent/default.lua)
+      extend = nil, -- Per-adapter overrides keyed by config key
+      opts = {
+        show_presets = true,
+      },
+    },
     opts = {
       cmd_timeout = 20e3, -- Timeout for commands that resolve env variables (milliseconds)
     },

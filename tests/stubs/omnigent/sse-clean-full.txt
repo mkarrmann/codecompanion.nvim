@@ -1,0 +1,39 @@
+event: session.heartbeat
+data: {"sequence_number": null, "type": "session.heartbeat", "server_time": null}
+
+event: session.child_session.updated
+data: {"sequence_number": null, "type": "session.child_session.updated", "conversation_id": "conv_b695dd34d27147c0aa5b90a199bc33a1", "child_session_id": "conv_3570813347ae47bb8c449b65008f53d6", "child": {"id": "conv_3570813347ae47bb8c449b65008f53d6", "object": "child_session", "parent_session_id": "conv_b695dd34d27147c0aa5b90a199bc33a1", "title": "gpt:count-1-to-15-gpt", "tool": "gpt", "session_name": "count-1-to-15-gpt", "kind": "sub_agent", "created_at": 1784157722, "updated_at": 1784157754, "agent_id": "ag_eac9e787e68ae6774d77e618031c287a", "agent_name": null, "current_task_id": null, "current_task_status": "failed", "busy": false, "labels": {"omnigent.last_task_error_code": "runner_error", "omnigent.last_task_error_message": "inner executor error: unexpected status 421 Misdirected Request: Misdirected Request: no upstream configured for this host, url: https://azure-codex.ai-gateway.fbinfra.net/openai/v1/responses?api-version=v1; stderr: \u001b[2m2026-07-15T23:22:07.876845Z\u001b[0m \u001b[3\u2026"}, "last_task_error": {"code": "runner_error", "message": "inner executor error: unexpected status 421 Misdirected Request: Misdirected Request: no upstream configured for this host, url: https://azure-codex.ai-gateway.fbinfra.net/openai/v1/responses?api-version=v1; stderr: \u001b[2m2026-07-15T23:22:07.876845Z\u001b[0m \u001b[3\u2026"}, "last_message_preview": "Count slowly from 1 to 15, one number per line, with a short pause of thought before each.", "pending_elicitations_count": 0}}
+
+event: session.child_session.updated
+data: {"sequence_number": null, "type": "session.child_session.updated", "conversation_id": "conv_b695dd34d27147c0aa5b90a199bc33a1", "child_session_id": "conv_5a845155d471471684edb6a6054bc486", "child": {"id": "conv_5a845155d471471684edb6a6054bc486", "object": "child_session", "parent_session_id": "conv_b695dd34d27147c0aa5b90a199bc33a1", "title": "claude:count-1-to-15-claude", "tool": "claude", "session_name": "count-1-to-15-claude", "kind": "sub_agent", "created_at": 1784157719, "updated_at": 1784157739, "agent_id": "ag_eac9e787e68ae6774d77e618031c287a", "agent_name": null, "current_task_id": null, "current_task_status": "completed", "busy": false, "labels": {"omnigent.last_task_error_code": "", "omnigent.last_task_error_message": ""}, "last_task_error": null, "last_message_preview": "1 ...one, the starting point. 2 ...two, doubling up. 3 ...three, a small triangle forming. 4 ...four, corners of a square. 5 ...five, a whole hand. 6\u2026", "pending_elicitations_count": 0}}
+
+event: session.resource.created
+data: {"sequence_number": null, "type": "session.resource.created", "resource": {"id": "terminal_tui_main", "object": "session.resource", "type": "terminal", "session_id": "conv_b695dd34d27147c0aa5b90a199bc33a1", "name": "tui:main", "metadata": {"terminal_name": "tui", "session_key": "main", "running": true, "tmux_socket": "/tmp/omnigent-terminal-cmqna8ez/tmux.sock", "tmux_target": "main", "terminal_transport": "control"}, "environment": "env_terminal_tui_main"}}
+
+event: session.changed_files.invalidated
+data: {"sequence_number": null, "type": "session.changed_files.invalidated", "session_id": "conv_b695dd34d27147c0aa5b90a199bc33a1", "environment_id": "default"}
+
+event: session.presence
+data: {"sequence_number": null, "type": "session.presence", "conversation_id": "conv_b695dd34d27147c0aa5b90a199bc33a1", "viewers": []}
+
+event: response.output_text.delta
+data: {"sequence_number": 3, "type": "response.output_text.delta", "delta": "done", "message_id": null, "index": null, "final": null}
+
+event: response.output_text.delta
+data: {"sequence_number": 4, "type": "response.output_text.delta", "delta": ".", "message_id": null, "index": null, "final": null}
+
+event: response.output_item.done
+data: {"sequence_number": null, "type": "response.output_item.done", "item": {"id": "msg_4eaebd457a7a470e9818f1cf08e97c37", "response_id": "resp_de65506dcf4c41cdbc202c57", "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": "done."}], "model": "debby"}}
+
+event: session.usage
+data: {"sequence_number": null, "type": "session.usage", "conversation_id": "conv_b695dd34d27147c0aa5b90a199bc33a1", "context_tokens": null, "context_window": null, "total_cost_usd": null, "usage_by_model": {"claude-opus-4-7": {"input_tokens": 33, "output_tokens": 1325, "total_tokens": 1358, "cache_read_input_tokens": 195450, "cache_creation_input_tokens": 148287, "total_cost_usd": null}}}
+
+event: response.completed
+data: {"sequence_number": 6, "type": "response.completed", "response": {"id": "resp_de65506dcf4c41cdbc202c57", "object": "response", "status": "completed", "model": "debby", "created_at": 1784157804, "completed_at": null, "output": [], "background": false, "store": true, "usage": {"input_tokens": 6, "output_tokens": 6, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 12, "context_tokens": 50710, "cache_read_input_tokens": 50309, "cache_creation_input_tokens": 395, "model": "claude-opus-4-7", "cost_usd": null}, "previous_response_id": null, "conversation": null, "instructions": null, "reasoning": null, "error": null, "incomplete_details": null}}
+
+event: session.status
+data: {"sequence_number": null, "type": "session.status", "conversation_id": "conv_b695dd34d27147c0aa5b90a199bc33a1", "status": "idle", "response_id": null, "error": null, "background_task_count": null}
+
+event: session.heartbeat
+data: {"sequence_number": null, "type": "session.heartbeat", "server_time": null}
+

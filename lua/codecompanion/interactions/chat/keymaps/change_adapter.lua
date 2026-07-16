@@ -25,13 +25,19 @@ end
 ---@param current_adapter string The currently selected adapter
 ---@return table List of adapter names with current adapter first
 function M.get_adapters_list(current_adapter)
-  local adapters =
-    vim.tbl_deep_extend("force", {}, vim.deepcopy(config.adapters.acp), vim.deepcopy(config.adapters.http))
+  local adapters = vim.tbl_deep_extend(
+    "force",
+    {},
+    vim.deepcopy(config.adapters.acp),
+    vim.deepcopy(config.adapters.http),
+    vim.deepcopy(config.adapters.omnigent or {})
+  )
 
   local adapters_list = vim
     .iter(adapters)
     :filter(function(adapter)
-      -- Clear out the acp and http keys
+      -- Clear out the family container keys (note: "omnigent" is also the name
+      -- of the generic omnigent adapter, so it is intentionally NOT filtered)
       return adapter ~= "acp"
         and adapter ~= "http"
         and adapter ~= "extend"
@@ -137,6 +143,20 @@ function M.list_acp_models(connection)
   return models
 end
 
+---List available models for an omnigent adapter from the live session snapshot.
+---Models are sourced from the `session.model_options` stream event / session
+---snapshot (there is no server-side /models REST endpoint on the base URL).
+---@param chat CodeCompanion.Chat
+---@return table|nil
+function M.list_omnigent_models(chat)
+  local session = chat.omnigent_session
+  local options = session and session.model_options
+  if type(options) ~= "table" or #options < 1 then
+    return nil
+  end
+  return options
+end
+
 ---Update the system prompt after adapter change
 ---@param chat CodeCompanion.Chat
 function M.update_system_prompt(chat)
@@ -173,13 +193,25 @@ function M.select_model(chat)
     end
     current_model = acp_models.currentModelId
   end
+  if adapter_type == "omnigent" then
+    models_list = M.list_omnigent_models(chat)
+    if not models_list then
+      return log:debug("No models to select for the omnigent adapter")
+    end
+    current_model = chat.omnigent_session
+      and (chat.omnigent_session.model_override or chat.omnigent_session.model)
+      or nil
+  end
 
   if not models_list then
     return
   end
 
   local function get_model_id(model)
-    return type(model) == "table" and model.id or model.modelId or model
+    if type(model) == "table" then
+      return model.id or model.value or model.modelId
+    end
+    return model
   end
 
   local current_id = get_model_id(current_model)
@@ -196,6 +228,11 @@ function M.select_model(chat)
           display = model.description or model.formatted_name or model.id or "Unknown"
         elseif adapter_type == "acp" then
           display = model.name
+          if model.description then
+            display = string.format("%s - %s", display, model.description)
+          end
+        elseif adapter_type == "omnigent" then
+          display = model.name or model.formatted_name or model.value or model.id or "Unknown"
           if model.description then
             display = string.format("%s - %s", display, model.description)
           end

@@ -521,7 +521,9 @@ end
 ---@param args CodeCompanion.ChatArgs
 ---@return nil
 local function start_mcp_for_chat(chat, args)
-  if chat.adapter.type == "acp" or args.mcp_servers == "none" then
+  -- ACP and omnigent both own tools server-side; CodeCompanion must not push its
+  -- local tool registry to them.
+  if chat.adapter.type == "acp" or chat.adapter.type == "omnigent" or args.mcp_servers == "none" then
     return
   end
   if args.mcp_servers then
@@ -822,7 +824,12 @@ end
 ---@return CodeCompanion.Chat
 function Chat:change_model(args)
   local function apply()
-    return adapters.set_model({ acp_connection = self.acp_connection, adapter = self.adapter, model = args.model })
+    return adapters.set_model({
+      acp_connection = self.acp_connection,
+      omnigent_session = self.omnigent_session,
+      adapter = self.adapter,
+      model = args.model,
+    })
   end
 
   if self.adapter.type == "http" then
@@ -833,6 +840,8 @@ function Chat:change_model(args)
     self:set_system_prompt()
     self:apply_settings()
   elseif self.adapter.type == "acp" then
+    apply()
+  elseif self.adapter.type == "omnigent" then
     apply()
   end
 
@@ -1299,6 +1308,14 @@ function Chat:_submit_acp(payload)
   self.current_request = acp_handler:submit(payload)
 end
 
+---Make a request to an omnigent server using the omnigent session runtime
+---@param payload table The payload to send to the LLM
+---@return nil
+function Chat:_submit_omnigent(payload)
+  local handler = require("codecompanion.interactions.chat.omnigent.handler").new(self)
+  self.current_request = handler:submit(payload)
+end
+
 ---Submit the chat buffer's contents to the LLM
 ---@param opts? table
 ---@return nil
@@ -1404,6 +1421,8 @@ function Chat:submit(opts)
     self:_submit_http(payload)
   elseif self.adapter.type == "acp" then
     self:_submit_acp(payload)
+  elseif self.adapter.type == "omnigent" then
+    self:_submit_omnigent(payload)
   end
 
   utils.fire("ChatSubmitted", { bufnr = self.bufnr, id = self.id, type = self.adapter.type })
@@ -1787,6 +1806,9 @@ function Chat:close()
   end
   if self.adapter.type == "acp" and self.acp_connection then
     self.acp_connection:disconnect()
+  elseif self.adapter.type == "omnigent" and self.omnigent_session then
+    -- Close only the local SSE subscription; the durable server session lives on.
+    self.omnigent_session:stop_stream()
   end
 end
 
@@ -1994,6 +2016,8 @@ function Chat:update_metadata()
         }
       end
     end
+  elseif self.adapter.type == "omnigent" and self.omnigent_session then
+    model = self.omnigent_session.model_override or self.omnigent_session.model or "default"
   end
 
   _G.codecompanion_chat_metadata[self.bufnr] = {
