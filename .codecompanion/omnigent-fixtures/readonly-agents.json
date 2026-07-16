@@ -1,0 +1,270 @@
+{
+    "object": "list",
+    "data": [
+        {
+            "id": "ag_eac9e787e68ae6774d77e618031c287a",
+            "object": "agent",
+            "name": "debby",
+            "version": 1,
+            "description": "A two-headed brainstorming partner. Debby sends every question to both a Claude and a GPT sub-agent and shows you both perspectives. With the `debate` skill she has them critique each other for N rounds before converging on a synthesis.",
+            "created_at": 1784064087,
+            "updated_at": null,
+            "harness": "claude-sdk",
+            "mcp_servers": [],
+            "mcp_servers_editable": false,
+            "policies": [],
+            "skills": [
+                {
+                    "name": "debate",
+                    "description": "Have the Claude and GPT partners critique each other's answers across a configurable number of rounds (default 1) before converging on a synthesis. Use when the user wants the two perspectives stress-tested against each other, not just shown side by side."
+                }
+            ],
+            "terminals": [],
+            "builtin": true
+        },
+        {
+            "id": "ag_db097e89797b66fb7e30699813ae09d2",
+            "object": "agent",
+            "name": "antigravity-native-ui",
+            "version": 1,
+            "description": null,
+            "created_at": 1784064087,
+            "updated_at": null,
+            "harness": "antigravity-native",
+            "mcp_servers": [],
+            "mcp_servers_editable": false,
+            "policies": [],
+            "skills": [],
+            "terminals": [
+                "zsh",
+                "bash"
+            ],
+            "builtin": true
+        },
+        {
+            "id": "ag_cf65137fc096a61a6434956c92093549",
+            "object": "agent",
+            "name": "opencode-native-ui",
+            "version": 1,
+            "description": null,
+            "created_at": 1784064087,
+            "updated_at": null,
+            "harness": "opencode-native",
+            "mcp_servers": [],
+            "mcp_servers_editable": false,
+            "policies": [],
+            "skills": [],
+            "terminals": [
+                "zsh",
+                "bash"
+            ],
+            "builtin": true
+        },
+        {
+            "id": "ag_cc8fef6623a8792be9c039cf2673ce93",
+            "object": "agent",
+            "name": "kiro-native-ui",
+            "version": 1,
+            "description": null,
+            "created_at": 1784064087,
+            "updated_at": null,
+            "harness": "kiro-native",
+            "mcp_servers": [],
+            "mcp_servers_editable": false,
+            "policies": [],
+            "skills": [],
+            "terminals": [
+                "zsh",
+                "bash"
+            ],
+            "builtin": true
+        },
+        {
+            "id": "ag_a5fac3a24c1961af2dbb1cafe0a81425",
+            "object": "agent",
+            "name": "cursor-native-ui",
+            "version": 1,
+            "description": null,
+            "created_at": 1784064087,
+            "updated_at": null,
+            "harness": "cursor-native",
+            "mcp_servers": [],
+            "mcp_servers_editable": false,
+            "policies": [],
+            "skills": [],
+            "terminals": [
+                "zsh",
+                "bash"
+            ],
+            "builtin": true
+        },
+        {
+            "id": "ag_a1b7caa17404f6716180ba69aa37c592",
+            "object": "agent",
+            "name": "pi-native-ui",
+            "version": 1,
+            "description": null,
+            "created_at": 1784064087,
+            "updated_at": null,
+            "harness": "pi-native",
+            "mcp_servers": [],
+            "mcp_servers_editable": false,
+            "policies": [],
+            "skills": [],
+            "terminals": [
+                "zsh",
+                "bash"
+            ],
+            "builtin": true
+        },
+        {
+            "id": "ag_9e7d109e7da66e8b5ed4ec3ecb54cef1",
+            "object": "agent",
+            "name": "kimi-native-ui",
+            "version": 1,
+            "description": null,
+            "created_at": 1784064087,
+            "updated_at": null,
+            "harness": "kimi-native",
+            "mcp_servers": [],
+            "mcp_servers_editable": false,
+            "policies": [],
+            "skills": [],
+            "terminals": [
+                "zsh",
+                "bash"
+            ],
+            "builtin": true
+        },
+        {
+            "id": "ag_93dd98c4a79bd26a1dd5dc592ee38afb",
+            "object": "agent",
+            "name": "goose-native-ui",
+            "version": 1,
+            "description": null,
+            "created_at": 1784064087,
+            "updated_at": null,
+            "harness": "goose-native",
+            "mcp_servers": [],
+            "mcp_servers_editable": false,
+            "policies": [],
+            "skills": [],
+            "terminals": [
+                "zsh",
+                "bash"
+            ],
+            "builtin": true
+        },
+        {
+            "id": "ag_58a1bc5bf0bba6d31ceeb7661f8d751c",
+            "object": "agent",
+            "name": "claude-native-ui",
+            "version": 1,
+            "description": null,
+            "created_at": 1784064087,
+            "updated_at": null,
+            "harness": "claude-native",
+            "mcp_servers": [],
+            "mcp_servers_editable": false,
+            "policies": [],
+            "skills": [],
+            "terminals": [
+                "zsh",
+                "bash"
+            ],
+            "builtin": true
+        },
+        {
+            "id": "ag_32113910cf31fcc63dc96bbde428b97c",
+            "object": "agent",
+            "name": "hermes-native-ui",
+            "version": 1,
+            "description": null,
+            "created_at": 1784064087,
+            "updated_at": null,
+            "harness": "hermes-native",
+            "mcp_servers": [],
+            "mcp_servers_editable": false,
+            "policies": [],
+            "skills": [],
+            "terminals": [
+                "zsh",
+                "bash"
+            ],
+            "builtin": true
+        },
+        {
+            "id": "ag_2cffe181a2fc6cf417a49e1cf8b28d77",
+            "object": "agent",
+            "name": "qwen-native-ui",
+            "version": 1,
+            "description": null,
+            "created_at": 1784064087,
+            "updated_at": null,
+            "harness": "qwen-native",
+            "mcp_servers": [],
+            "mcp_servers_editable": false,
+            "policies": [],
+            "skills": [],
+            "terminals": [
+                "zsh",
+                "bash"
+            ],
+            "builtin": true
+        },
+        {
+            "id": "ag_16a06503889b0c3034496821afd41b9e",
+            "object": "agent",
+            "name": "codex-native-ui",
+            "version": 1,
+            "description": null,
+            "created_at": 1784064087,
+            "updated_at": null,
+            "harness": "codex-native",
+            "mcp_servers": [],
+            "mcp_servers_editable": false,
+            "policies": [],
+            "skills": [],
+            "terminals": [
+                "zsh",
+                "bash"
+            ],
+            "builtin": true
+        },
+        {
+            "id": "ag_057995d1517418e6839f51d340785dd6",
+            "object": "agent",
+            "name": "polly",
+            "version": 1,
+            "description": "A coding orchestrator that breaks your goal into pieces and hands them to a team of Claude Code, Codex, OpenCode, Cursor, Hermes, and Pi sub-agents to build. Polly writes no code itself \u2014 it plans and splits up the work, delegates all of it (investigation / implementation / review), then has a separate independent different-model reviewer double-check the work before putting it all together. Best for bigger tasks you want planned and split up.",
+            "created_at": 1784064087,
+            "updated_at": null,
+            "harness": "claude-sdk",
+            "mcp_servers": [],
+            "mcp_servers_editable": false,
+            "policies": [],
+            "skills": [
+                {
+                    "name": "cross-review",
+                    "description": "Verify an implementer's diff with an INDEPENDENT, different-vendor sub-agent (diff plus contract only); turn blocking issues into fix-tasks and loop until clean."
+                },
+                {
+                    "name": "fanout",
+                    "description": "Run independent subtasks in parallel \u2014 one git worktree and one implementation sub-agent per task, each opening its own PR \u2014 then cross-review every PR. polly never merges; the human does."
+                },
+                {
+                    "name": "investigate",
+                    "description": "Delegate read-only investigation, debugging, audit, search, or code-understanding tasks to sub-agents; synthesize only from their structured reports."
+                }
+            ],
+            "terminals": [
+                "shell",
+                "zsh"
+            ],
+            "builtin": true
+        }
+    ],
+    "first_id": "ag_eac9e787e68ae6774d77e618031c287a",
+    "last_id": "ag_057995d1517418e6839f51d340785dd6",
+    "has_more": false
+}

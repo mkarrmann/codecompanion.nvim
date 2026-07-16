@@ -1,0 +1,30 @@
+event: session.heartbeat
+data: {"sequence_number": null, "type": "session.heartbeat", "server_time": null}
+
+event: session.child_session.updated
+data: {"sequence_number": null, "type": "session.child_session.updated", "conversation_id": "conv_b695dd34d27147c0aa5b90a199bc33a1", "child_session_id": "conv_5a845155d471471684edb6a6054bc486", "child": {"id": "conv_5a845155d471471684edb6a6054bc486", "object": "child_session", "parent_session_id": "conv_b695dd34d27147c0aa5b90a199bc33a1", "title": "claude:count-1-to-15-claude", "tool": "claude", "session_name": "count-1-to-15-claude", "kind": "sub_agent", "created_at": 1784157719, "updated_at": 1784157721, "agent_id": "ag_eac9e787e68ae6774d77e618031c287a", "agent_name": null, "current_task_id": null, "current_task_status": null, "busy": false, "labels": {}, "last_task_error": null, "last_message_preview": "Count slowly from 1 to 15, one number per line, with a short pause of thought before each.", "pending_elicitations_count": 0}}
+
+event: session.resource.created
+data: {"sequence_number": null, "type": "session.resource.created", "resource": {"id": "terminal_tui_main", "object": "session.resource", "type": "terminal", "session_id": "conv_b695dd34d27147c0aa5b90a199bc33a1", "name": "tui:main", "metadata": {"terminal_name": "tui", "session_key": "main", "running": true, "tmux_socket": "/tmp/omnigent-terminal-cmqna8ez/tmux.sock", "tmux_target": "main", "terminal_transport": "control"}, "environment": "env_terminal_tui_main"}}
+
+event: session.changed_files.invalidated
+data: {"sequence_number": null, "type": "session.changed_files.invalidated", "session_id": "conv_b695dd34d27147c0aa5b90a199bc33a1", "environment_id": "default"}
+
+event: session.presence
+data: {"sequence_number": null, "type": "session.presence", "conversation_id": "conv_b695dd34d27147c0aa5b90a199bc33a1", "viewers": []}
+
+event: session.child_session.updated
+data: {"sequence_number": null, "type": "session.child_session.updated", "conversation_id": "conv_b695dd34d27147c0aa5b90a199bc33a1", "child_session_id": "conv_5a845155d471471684edb6a6054bc486", "child": {"id": "conv_5a845155d471471684edb6a6054bc486", "title": "claude:count-1-to-15-claude", "tool": "claude", "session_name": "count-1-to-15-claude", "busy": true, "current_task_status": "in_progress", "last_task_error": null}}
+
+event: response.output_item.done
+data: {"sequence_number": 8, "type": "response.output_item.done", "item": {"id": "fc_af0fc5d8ad3c", "type": "function_call", "status": "completed", "name": "sys_session_send", "arguments": "{\"agent\": \"claude\", \"title\": \"count-1-to-15-claude\", \"args\": \"Count slowly from 1 to 15, one number per line, with a short pause of thought before each.\"}", "call_id": "toolu_vrtx_01EdKtxHv4Ciyco83CJVWAFz", "agent": "ag_eac9e787e68ae6774d77e618031c287a"}}
+
+event: response.output_item.done
+data: {"sequence_number": 9, "type": "response.output_item.done", "item": {"id": "fco_f9fcfc2e8dcc", "type": "function_call_output", "call_id": "toolu_vrtx_01EdKtxHv4Ciyco83CJVWAFz", "output": "{\"task_id\": \"conv_5a845155d471471684edb6a6054bc486\", \"handle_id\": \"conv_5a845155d471471684edb6a6054bc486\", \"conversation_id\": \"conv_5a845155d471471684edb6a6054bc486\", \"kind\": \"sub_agent\", \"agent\": \"claude\", \"title\": \"count-1-to-15-claude\", \"status\": \"launching\", \"message\": \"[System: sub-agent claude title 'count-1-to-15-claude' launching as task conv_5a845155d471471684edb6a6054bc486. Result will appear in your inbox; call sys_read_inbox to check or sys_cancel_task to interrupt it.]\"}", "arguments": "{\"agent\": \"claude\", \"title\": \"count-1-to-15-claude\", \"args\": \"Count slowly from 1 to 15, one number per line, with a short pause of thought before each.\"}", "status": "completed", "response_id": "resp_230cdf8fef274a3ba5bbab8b"}}
+
+event: session.created
+data: {"sequence_number": null, "type": "session.created", "conversation_id": "conv_b695dd34d27147c0aa5b90a199bc33a1", "child_session_id": "conv_3570813347ae47bb8c449b65008f53d6", "agent_id": "ag_eac9e787e68ae6774d77e618031c287a", "parent_session_id": "conv_b695dd34d27147c0aa5b90a199bc33a1"}
+
+event: session.child_session.updated
+data: {"sequence_number": null, "type": "session.child_session.updated", "conversation_id": "conv_b695dd34d27147c0aa5b90a199bc33a1", "child_session_id": "conv_3570813347ae47bb8c449b65008f53d6", "child": {"id": "conv_3570813347ae47bb8c449b65008f53d6", "title": "gpt:count-1-to-15-gpt", "tool": "gpt", "session_name": "count-1-to-15-gpt", "busy": false, "current_task_status": "launching"}}
+

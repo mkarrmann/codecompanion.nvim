@@ -1,0 +1,24 @@
+event: session.heartbeat
+data: {"sequence_number": null, "type": "session.heartbeat", "server_time": null}
+
+event: session.child_session.updated
+data: {"sequence_number": null, "type": "session.child_session.updated", "conversation_id": "conv_b695dd34d27147c0aa5b90a199bc33a1", "child_session_id": "conv_3570813347ae47bb8c449b65008f53d6", "child": {"id": "conv_3570813347ae47bb8c449b65008f53d6", "object": "child_session", "parent_session_id": "conv_b695dd34d27147c0aa5b90a199bc33a1", "title": "gpt:count-1-to-15-gpt", "tool": "gpt", "session_name": "count-1-to-15-gpt", "kind": "sub_agent", "created_at": 1784157722, "updated_at": 1784157724, "agent_id": "ag_eac9e787e68ae6774d77e618031c287a", "agent_name": null, "current_task_id": null, "current_task_status": "in_progress", "busy": true, "labels": {"omnigent.last_task_error_code": "", "omnigent.last_task_error_message": ""}, "last_task_error": null, "last_message_preview": "Count slowly from 1 to 15, one number per line, with a short pause of thought before each.", "pending_elicitations_count": 0}}
+
+event: session.child_session.updated
+data: {"sequence_number": null, "type": "session.child_session.updated", "conversation_id": "conv_b695dd34d27147c0aa5b90a199bc33a1", "child_session_id": "conv_5a845155d471471684edb6a6054bc486", "child": {"id": "conv_5a845155d471471684edb6a6054bc486", "object": "child_session", "parent_session_id": "conv_b695dd34d27147c0aa5b90a199bc33a1", "title": "claude:count-1-to-15-claude", "tool": "claude", "session_name": "count-1-to-15-claude", "kind": "sub_agent", "created_at": 1784157719, "updated_at": 1784157721, "agent_id": "ag_eac9e787e68ae6774d77e618031c287a", "agent_name": null, "current_task_id": null, "current_task_status": "in_progress", "busy": true, "labels": {"omnigent.last_task_error_code": "", "omnigent.last_task_error_message": ""}, "last_task_error": null, "last_message_preview": "Count slowly from 1 to 15, one number per line, with a short pause of thought before each.", "pending_elicitations_count": 0}}
+
+event: session.resource.created
+data: {"sequence_number": null, "type": "session.resource.created", "resource": {"id": "terminal_tui_main", "object": "session.resource", "type": "terminal", "session_id": "conv_b695dd34d27147c0aa5b90a199bc33a1", "name": "tui:main", "metadata": {"terminal_name": "tui", "session_key": "main", "running": true, "tmux_socket": "/tmp/omnigent-terminal-cmqna8ez/tmux.sock", "tmux_target": "main", "terminal_transport": "control"}, "environment": "env_terminal_tui_main"}}
+
+event: session.changed_files.invalidated
+data: {"sequence_number": null, "type": "session.changed_files.invalidated", "session_id": "conv_b695dd34d27147c0aa5b90a199bc33a1", "environment_id": "default"}
+
+event: session.presence
+data: {"sequence_number": null, "type": "session.presence", "conversation_id": "conv_b695dd34d27147c0aa5b90a199bc33a1", "viewers": []}
+
+event: session.child_session.updated
+data: {"sequence_number": null, "type": "session.child_session.updated", "conversation_id": "conv_b695dd34d27147c0aa5b90a199bc33a1", "child_session_id": "conv_5a845155d471471684edb6a6054bc486", "child": {"id": "conv_5a845155d471471684edb6a6054bc486", "title": "claude:count-1-to-15-claude", "tool": "claude", "session_name": "count-1-to-15-claude", "busy": false, "current_task_status": "completed", "last_message_preview": "1\n\n...one, the starting point.\n\n2\n\n...two, doubling up.\n\n3\n\n...three, a small triangle forming.\n\n4\n\n...four, corners of a square.\n\n5\n\n...five, a whole\u2026"}}
+
+event: session.usage
+data: {"sequence_number": null, "type": "session.usage", "conversation_id": "conv_b695dd34d27147c0aa5b90a199bc33a1", "context_tokens": null, "context_window": null, "total_cost_usd": null, "usage_by_model": {"claude-opus-4-7": {"input_tokens": 13, "output_tokens": 763, "total_tokens": 776, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 97583, "total_cost_usd": null}}}
+

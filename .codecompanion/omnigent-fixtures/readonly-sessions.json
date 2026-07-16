@@ -1,0 +1,66 @@
+{
+    "object": "list",
+    "data": [
+        {
+            "id": "conv_6e5f4c9ac67b4032ad002814ef1b02f6",
+            "agent_id": "ag_5ddd2c1f58a34b04887b152664982c3f",
+            "agent_name": "claude-native-ui",
+            "status": "failed",
+            "created_at": 1784148055,
+            "updated_at": 1784148434,
+            "title": "hi",
+            "labels": {
+                "omnigent.claude_native.bridge_id": "conv_6e5f4c9ac67b4032ad002814ef1b02f6",
+                "omnigent.last_context_tokens": "64507",
+                "omnigent.last_context_window": "200000",
+                "omnigent.last_task_error_code": "runner_disconnected",
+                "omnigent.last_task_error_message": "Runner disconnected unexpectedly.",
+                "omnigent.ui": "terminal",
+                "omnigent.wrapper": "claude-code-native-ui"
+            },
+            "runner_id": "runner_token_6cdd0dcdc82531b4ee531d476d8480ee",
+            "host_id": "host_c8c10fd6c8c04aa9b6bf4263bb2ce59a",
+            "reasoning_effort": "high",
+            "permission_level": 4,
+            "owner": "local",
+            "external_session_id": "368a5000-f547-4c15-9e71-37346d10057e",
+            "pending_elicitations_count": 0,
+            "workspace": "/home/mkarrmann/checkout1/fbsource",
+            "archived": false,
+            "comments_count": 0,
+            "viewer_unread": false
+        },
+        {
+            "id": "conv_7bfa4fb0623a49fbb46a871e27beedac",
+            "agent_id": "ag_39192ca0072c481d9139ea50b8bba7d7",
+            "agent_name": "claude-native-ui",
+            "status": "failed",
+            "created_at": 1784142139,
+            "updated_at": 1784142194,
+            "title": "hi",
+            "labels": {
+                "omnigent.claude_native.bridge_id": "conv_7bfa4fb0623a49fbb46a871e27beedac",
+                "omnigent.last_context_tokens": "42275",
+                "omnigent.last_context_window": "200000",
+                "omnigent.last_task_error_code": "runner_disconnected",
+                "omnigent.last_task_error_message": "Runner disconnected unexpectedly.",
+                "omnigent.ui": "terminal",
+                "omnigent.wrapper": "claude-code-native-ui"
+            },
+            "runner_id": "runner_token_dfcc1a629b808de71145478d96cd9322",
+            "host_id": "host_c8c10fd6c8c04aa9b6bf4263bb2ce59a",
+            "reasoning_effort": "high",
+            "permission_level": 4,
+            "owner": "local",
+            "external_session_id": "f7bb3bfe-d282-4339-857d-91b895bcb1ef",
+            "pending_elicitations_count": 0,
+            "workspace": "/home/mkarrmann/checkout1/fbsource",
+            "archived": false,
+            "comments_count": 0,
+            "viewer_unread": false
+        }
+    ],
+    "first_id": "conv_6e5f4c9ac67b4032ad002814ef1b02f6",
+    "last_id": "conv_7bfa4fb0623a49fbb46a871e27beedac",
+    "has_more": false
+}

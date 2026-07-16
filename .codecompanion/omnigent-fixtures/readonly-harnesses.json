@@ -1,0 +1,118 @@
+{
+    "data": [
+        {
+            "id": "antigravity",
+            "label": "Antigravity",
+            "capabilities": {
+                "integration_mode": "sdk-in-process",
+                "elicitation": "none",
+                "resume": "cold-only",
+                "effort": "gemini",
+                "model_family": "gemini",
+                "auth": "own-auth",
+                "subagents": false,
+                "interrupt": true,
+                "streaming": true,
+                "steering": null,
+                "live_queue": null,
+                "images": null,
+                "compaction": null
+            }
+        },
+        {
+            "id": "claude-sdk",
+            "label": "Claude SDK",
+            "capabilities": {
+                "integration_mode": "sdk-in-process",
+                "elicitation": "none",
+                "resume": "cold-only",
+                "effort": "anthropic",
+                "model_family": "claude",
+                "auth": "omnigent-credential",
+                "subagents": false,
+                "interrupt": true,
+                "streaming": true,
+                "steering": null,
+                "live_queue": null,
+                "images": null,
+                "compaction": null
+            }
+        },
+        {
+            "id": "codex",
+            "label": "Codex",
+            "capabilities": {
+                "integration_mode": "cli-subprocess",
+                "elicitation": "jsonrpc",
+                "resume": "warm-reattach",
+                "effort": "openai",
+                "model_family": "gpt",
+                "auth": "omnigent-credential",
+                "subagents": false,
+                "interrupt": true,
+                "streaming": true,
+                "steering": null,
+                "live_queue": null,
+                "images": null,
+                "compaction": null
+            }
+        },
+        {
+            "id": "copilot",
+            "label": "Copilot",
+            "capabilities": {
+                "integration_mode": "sdk-in-process",
+                "elicitation": "none",
+                "resume": "cold-only",
+                "effort": "copilot",
+                "model_family": "multi",
+                "auth": "own-auth",
+                "subagents": false,
+                "interrupt": true,
+                "streaming": true,
+                "steering": null,
+                "live_queue": null,
+                "images": null,
+                "compaction": null
+            }
+        },
+        {
+            "id": "cursor",
+            "label": "Cursor",
+            "capabilities": {
+                "integration_mode": "sdk-in-process",
+                "elicitation": "none",
+                "resume": "warm-reattach",
+                "effort": "none",
+                "model_family": "multi",
+                "auth": "own-auth",
+                "subagents": false,
+                "interrupt": true,
+                "streaming": true,
+                "steering": null,
+                "live_queue": null,
+                "images": null,
+                "compaction": null
+            }
+        },
+        {
+            "id": "pi",
+            "label": "Pi",
+            "capabilities": {
+                "integration_mode": "cli-subprocess",
+                "elicitation": "none",
+                "resume": "cold-only",
+                "effort": "none",
+                "model_family": "multi",
+                "auth": "omnigent-credential",
+                "subagents": false,
+                "interrupt": true,
+                "streaming": true,
+                "steering": null,
+                "live_queue": null,
+                "images": null,
+                "compaction": null
+            }
+        }
+    ]
+}

@@ -1,0 +1,13 @@
+{
+    "accounts_enabled": false,
+    "single_user": true,
+    "login_url": null,
+    "needs_setup": false,
+    "databricks_features": false,
+    "managed_sandboxes_enabled": false,
+    "sandbox_provider": null,
+    "sharing_mode": "on",
+    "public_sharing_enabled": true,
+    "server_version": "0.6.0.dev0",
+    "smart_routing_enabled": false
+}
