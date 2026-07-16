@@ -68,6 +68,74 @@ function M.durable_item_to_message(item)
   return { role = C.LLM_ROLE, content = M.format_unknown(t), opts = { system = true } }
 end
 
+---Best-effort tool name from a function_call item / update.
+---@param item table
+---@return string
+function M.tool_name(item)
+  return item.name
+    or item.tool_name
+    or (type(item.tool) == "table" and item.tool.name)
+    or "tool"
+end
+
+---A compact one-line marker for a live tool call.
+---@param item table
+---@return string
+function M.tool_call_line(item)
+  return "\n> ⚙ **tool** `" .. M.tool_name(item) .. "`\n"
+end
+
+---A compact one-line marker for a child (sub-agent) session update.
+---@param u table An update with child_session_id / child
+---@return string
+function M.child_session_line(u)
+  local c = u.child or {}
+  local title = c.title or c.session_name or u.child_session_id or "sub-agent"
+  local bits = {}
+  if c.tool then
+    bits[#bits + 1] = c.tool
+  end
+  local status = c.current_task_status or (c.busy and "busy") or nil
+  if status then
+    bits[#bits + 1] = status
+  end
+  local suffix = (#bits > 0) and (" (" .. table.concat(bits, " · ") .. ")") or ""
+  return "\n> ↳ **sub-agent** " .. title .. suffix .. "\n"
+end
+
+---A compact one-line marker for a policy denial.
+---@param u table An update with reason / phase
+---@return string
+function M.policy_denied_line(u)
+  local reason = u.reason or "denied"
+  local phase = u.phase and (" [" .. u.phase .. "]") or ""
+  return "\n> ⛔ **policy denied**" .. phase .. ": " .. reason .. "\n"
+end
+
+---Enrich a usage table with a context_window pulled from the session's model
+---catalog when the usage event omitted it (claude-sdk usage often nulls it). Pure;
+---returns a copy.
+---@param usage any
+---@param session? table
+---@return table
+function M.enrich_usage(usage, session)
+  usage = type(usage) == "table" and vim.deepcopy(usage) or {}
+  if not usage.context_window and session then
+    local opts = session.model_options
+    local cur = session.model_override or session.model
+    if type(opts) == "table" and cur then
+      for _, m in ipairs(opts) do
+        local id = m.id or m.value or m.modelId
+        if id == cur then
+          usage.context_window = m.context_window or m.context_length or m.max_context
+          break
+        end
+      end
+    end
+  end
+  return usage
+end
+
 ---Map a page of durable items to an ordered list of chat messages (skips nils).
 ---@param items table[]
 ---@return table[]

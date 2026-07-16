@@ -503,6 +503,43 @@ If you are providing code changes, use the insert_edit_into_file tool (if availa
             contains_code = false,
           },
         },
+        ["omnigent_children"] = {
+          path = "interactions.chat.slash_commands.builtin.omnigent_children",
+          description = "List the current Omnigent session's child (sub-agent) sessions",
+          ---@param opts { adapter: CodeCompanion.HTTPAdapter|CodeCompanion.ACPAdapter }
+          ---@return boolean
+          enabled = function(opts)
+            return opts.adapter and opts.adapter.type == "omnigent" or false
+          end,
+          opts = {
+            contains_code = false,
+          },
+        },
+        ["omnigent_resume"] = {
+          path = "interactions.chat.slash_commands.builtin.omnigent_resume",
+          description = "Resume a durable Omnigent session into this chat",
+          ---@param opts { adapter: CodeCompanion.HTTPAdapter|CodeCompanion.ACPAdapter }
+          ---@return boolean
+          enabled = function(opts)
+            return opts.adapter and opts.adapter.type == "omnigent" or false
+          end,
+          opts = {
+            contains_code = false,
+            max_sessions = 100,
+          },
+        },
+        ["omnigent_session"] = {
+          path = "interactions.chat.slash_commands.builtin.omnigent_session",
+          description = "Show the current Omnigent session's details",
+          ---@param opts { adapter: CodeCompanion.HTTPAdapter|CodeCompanion.ACPAdapter }
+          ---@return boolean
+          enabled = function(opts)
+            return opts.adapter and opts.adapter.type == "omnigent" or false
+          end,
+          opts = {
+            contains_code = false,
+          },
+        },
         ["resume"] = {
           path = "interactions.chat.slash_commands.builtin.resume",
           description = "Resume a previous ACP session",

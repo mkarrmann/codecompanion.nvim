@@ -45,6 +45,7 @@
 ---@class CodeCompanion.ChatArgs Arguments that can be injected into the chat
 ---@field acp_command? string The command to use to connect via ACP
 ---@field acp_session_id? string The ACP session ID which links to this chat buffer
+---@field omnigent_session_id? string The omnigent session ID to resume into this chat buffer
 ---@field adapter? CodeCompanion.HTTPAdapter|CodeCompanion.ACPAdapter The adapter used in this chat buffer
 ---@field auto_submit? boolean Automatically submit the chat when the chat buffer is created
 ---@field buffer_context? table Context of the buffer that the chat was initiated from
@@ -574,6 +575,7 @@ function Chat.new(args)
 
   local self = setmetatable({
     acp_session_id = args.acp_session_id or nil,
+    omnigent_session_id = args.omnigent_session_id or nil,
     buffer_context = args.buffer_context,
     callbacks = {},
     context_items = {},
@@ -1312,8 +1314,17 @@ end
 ---@param payload table The payload to send to the LLM
 ---@return nil
 function Chat:_submit_omnigent(payload)
-  local handler = require("codecompanion.interactions.chat.omnigent.handler").new(self)
-  self.current_request = handler:submit(payload)
+  self.current_request = require("codecompanion.interactions.chat.omnigent.controller").submit(self, payload)
+end
+
+---Resume an existing durable omnigent session into this chat buffer: load its
+---snapshot + durable history and hydrate the transcript WITHOUT posting a turn.
+---This is the M3 resume entry (used by the `/omnigent_resume` picker and the
+---dotfiles resume UX); `submit()` is only for posting new turns.
+---@param session_id? string If given, (re)bind this chat to that session id
+---@return boolean ok, table|nil err
+function Chat:resume_omnigent(session_id)
+  return require("codecompanion.interactions.chat.omnigent.controller").resume(self, session_id)
 end
 
 ---Submit the chat buffer's contents to the LLM
@@ -1808,7 +1819,7 @@ function Chat:close()
     self.acp_connection:disconnect()
   elseif self.adapter.type == "omnigent" and self.omnigent_session then
     -- Close only the local SSE subscription; the durable server session lives on.
-    self.omnigent_session:stop_stream()
+    require("codecompanion.interactions.chat.omnigent.controller").close(self)
   end
 end
 
@@ -1993,6 +2004,7 @@ end
 function Chat:update_metadata()
   local model
   local config_options
+  local omnigent_meta
 
   if self.adapter.type == "http" then
     model = self.adapter.schema and self.adapter.schema.model and self.adapter.schema.model.default
@@ -2017,7 +2029,8 @@ function Chat:update_metadata()
       end
     end
   elseif self.adapter.type == "omnigent" and self.omnigent_session then
-    model = self.omnigent_session.model_override or self.omnigent_session.model or "default"
+    omnigent_meta = require("codecompanion.interactions.chat.omnigent.controller").session_meta(self)
+    model = (omnigent_meta and omnigent_meta.model) or "default"
   end
 
   _G.codecompanion_chat_metadata[self.bufnr] = {
@@ -2027,6 +2040,7 @@ function Chat:update_metadata()
       model_info = (self.adapter.model and self.adapter.model.info) and self.adapter.model.info,
       type = self.adapter.type,
     },
+    omnigent = omnigent_meta,
     config_options = config_options,
     context_items = #self.context_items,
     cycles = self.cycle,

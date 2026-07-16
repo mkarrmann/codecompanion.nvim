@@ -17,6 +17,7 @@
 
 local Client = require("codecompanion.omnigent.client")
 local Events = require("codecompanion.omnigent.events")
+local log = require("codecompanion.utils.log")
 
 ---@class CodeCompanion.Omnigent.Session
 ---@field client CodeCompanion.Omnigent.Client
@@ -84,8 +85,24 @@ function Session.new(opts)
     adapter = adapter or {},
     reducer = Events.new(),
     callbacks = opts.callbacks or {},
+    observer = nil,
+    seen_items = {},
     _stream = nil,
+    _stopping = false,
+    _reconnect_scheduled = false,
+    -- Injectable deferred scheduler (tests pass a synchronous variant). Signature
+    -- mirrors vim.defer_fn(fn, ms).
+    _defer = opts.defer or function(fn, ms)
+      vim.defer_fn(fn, ms or 0)
+    end,
   }, Session)
+end
+
+---Attach the persistent background observer (the consumer of updates while no
+---foreground request is bound). See interactions/chat/omnigent/observer.lua.
+---@param observer table|nil
+function Session:set_observer(observer)
+  self.observer = observer
 end
 
 ---Resolve agent / host / workspace for a new session. FAIL-CLOSED.
@@ -144,22 +161,35 @@ function Session:resolve_targets(opts)
   return { agent_id = agent_id, host_id = host_id, workspace = workspace }
 end
 
+---nil out a JSON-null (vim.NIL) so it can't poison `a or b` chains. Defensive:
+---the client/sse decoders already map null->absent, but a snapshot may reach here
+---from another path (e.g. a hand-built table or a future decoder change).
+---@generic T
+---@param v T
+---@return T|nil
+local function nn(v)
+  if v == nil or v == vim.NIL then
+    return nil
+  end
+  return v
+end
+
 ---Fold a session snapshot (from create/get) into this runtime's state.
 ---@param s table
 function Session:_ingest_snapshot(s)
   if type(s) ~= "table" then
     return
   end
-  self.session_id = s.id or self.session_id
-  self.agent_id = s.agent_id or self.agent_id
-  self.host_id = s.host_id or self.host_id
-  self.workspace = s.workspace or self.workspace
-  self.status = s.status or self.status
-  self.model = s.llm_model or s.model or self.model
-  self.model_override = s.model_override or self.model_override
-  self.reasoning_effort = s.reasoning_effort or self.reasoning_effort
-  self.model_options = s.model_options or self.model_options
-  self.title = s.title or self.title
+  self.session_id = nn(s.id) or self.session_id
+  self.agent_id = nn(s.agent_id) or self.agent_id
+  self.host_id = nn(s.host_id) or self.host_id
+  self.workspace = nn(s.workspace) or self.workspace
+  self.status = nn(s.status) or self.status
+  self.model = nn(s.llm_model) or nn(s.model) or self.model
+  self.model_override = nn(s.model_override) or self.model_override
+  self.reasoning_effort = nn(s.reasoning_effort) or self.reasoning_effort
+  self.model_options = nn(s.model_options) or self.model_options
+  self.title = nn(s.title) or self.title
 end
 
 ---Create a new durable session.
@@ -237,6 +267,13 @@ function Session:load(session_id)
     -- Fail loudly: an empty resume must be distinguishable from a failed fetch.
     return nil, ierr
   end
+  -- Seed the seen-items set so a later reconnect reconcile doesn't re-render
+  -- history that was already hydrated on load.
+  for _, item in ipairs(items) do
+    if item.id then
+      self.seen_items[item.id] = true
+    end
+  end
   return { session = s, items = items }
 end
 
@@ -257,48 +294,235 @@ function Session:_apply_state(u)
     end
   elseif u.kind == "usage" then
     self.usage = u.usage
+  elseif u.kind == "item_committed" then
+    -- Single source of truth for "what durable items have materialised in this
+    -- chat" -- populated for BOTH foreground and background updates so a
+    -- reconnect reconcile can skip anything already rendered live.
+    if u.item_id then
+      self.seen_items[u.item_id] = true
+    end
+  elseif u.kind == "elicitation" then
+    self.pending_elicitations = self.pending_elicitations or {}
+    if u.elicitation_id then
+      self.pending_elicitations[u.elicitation_id] = u
+    end
+  elseif u.kind == "elicitation_resolved" then
+    if self.pending_elicitations and u.elicitation_id then
+      self.pending_elicitations[u.elicitation_id] = nil
+    end
+  elseif u.kind == "child_session" or u.kind == "child_session_created" then
+    self.child_sessions = self.child_sessions or {}
+    local id = u.child_session_id
+    if id then
+      self.child_sessions[id] = u.child or self.child_sessions[id] or { id = id }
+    end
+  end
+end
+
+---True if a foreground handler currently owns the stream (its callback is bound).
+---@return boolean
+function Session:_foreground_active()
+  return self.callbacks.on_update ~= nil
+end
+
+---Is automatic reconnect-on-drop enabled for this session?
+---@return boolean
+function Session:_reconnect_enabled()
+  local o = self.adapter.opts or {}
+  return o.stream_reconnect == true or o.background_updates == true
+end
+
+---Route one decoded SSE event: reduce it, fold state, then deliver each update
+---to the foreground callback if bound, else to the persistent observer.
+---@param ev table
+function Session:_on_event(ev)
+  self:_arm_heartbeat() -- any traffic proves the stream is alive
+  local ok, updates = pcall(function()
+    return self.reducer:handle(ev)
+  end)
+  if not ok then
+    if self.callbacks.on_error then
+      self.callbacks.on_error({ message = "reducer error: " .. tostring(updates) })
+    end
+    return
+  end
+  for _, u in ipairs(updates) do
+    self:_apply_state(u)
+    if self.callbacks.on_update then
+      self.callbacks.on_update(u)
+    elseif self.observer then
+      local ook, oerr = pcall(function()
+        self.observer:handle_update(u)
+      end)
+      if not ook and self.callbacks.on_error then
+        self.callbacks.on_error({ message = "observer error: " .. tostring(oerr) })
+      end
+    end
+  end
+end
+
+---Open (or reopen) the underlying stream job. On a reconnect the in-flight text
+---accumulator is reset so the stream-first replay rebuilds cleanly (the observer
+---then appends only the new suffix); reducer identity/state is otherwise kept.
+---@param reconnecting? boolean
+function Session:_open_stream(reconnecting)
+  if reconnecting then
+    self.reducer:reset_inflight()
+  end
+  self._stream = self.client:stream_session(self.session_id, {
+    on_event = function(ev)
+      self:_on_event(ev)
+    end,
+    on_done = function(code)
+      self:_on_stream_done(code)
+    end,
+  })
+  self:_arm_heartbeat()
+end
+
+---Handle the stream job ending. Distinguishes an explicit stop from an
+---unexpected drop; auto-reconnects only when the observer (not a live foreground
+---turn) owns the stream, so the un-deduped foreground path can never double-render
+---a replayed message.
+---@param code? number
+function Session:_on_stream_done(code)
+  self._stream = nil
+  self:_cancel_heartbeat()
+  local was_foreground = self:_foreground_active()
+  if self.callbacks.on_stream_end then
+    self.callbacks.on_stream_end(code)
+  end
+  if self._stopping then
+    self._stopping = false
+    return
+  end
+  if not was_foreground and self.observer and self:_reconnect_enabled() then
+    self:_schedule_reconnect()
+  end
+end
+
+---Schedule a single deferred reconnect + reconcile (coalesced).
+function Session:_schedule_reconnect()
+  if self._reconnect_scheduled or self._stream then
+    return
+  end
+  self._reconnect_scheduled = true
+  local delay = (self.adapter.opts and self.adapter.opts.reconnect_delay) or 1000
+  self._defer(function()
+    self._reconnect_scheduled = false
+    if self._stopping or self._stream then
+      return
+    end
+    self:_open_stream(true)
+    self:_reconcile()
+  end, delay)
+end
+
+---After a reconnect, fetch durable items and render any the observer missed
+---(completed while disconnected). In-flight text is NOT in /items (stream-first
+---replay), so this only fills fully-missed, committed turns. Content already
+---rendered live is skipped via seen_items.
+function Session:_reconcile()
+  if not self.observer or not self.session_id then
+    return
+  end
+  local page = self.adapter.opts and self.adapter.opts.history_page_size
+  local items = self.client:list_items(self.session_id, page and { limit = page } or nil)
+  if not items then
+    return
+  end
+  for _, item in ipairs(items) do
+    local id = item.id
+    if id and not self.seen_items[id] then
+      self.seen_items[id] = true
+      -- While a background turn is mid-render, skip reconciling assistant message
+      -- items: the one in flight is being rendered live (and its committed id may
+      -- not line up with the id-less deltas), so re-rendering it would duplicate.
+      -- User messages and other item types still reconcile.
+      local skip = item.type == "message"
+        and item.role ~= "user"
+        and self.observer.has_partial
+        and self.observer:has_partial()
+      if not skip then
+        pcall(function()
+          self.observer:reconcile_item(item)
+        end)
+      end
+    end
+  end
+end
+
+---(Re)arm the heartbeat-timeout watchdog. Fires a forced reconnect if no stream
+---traffic arrives within `stream_heartbeat_timeout` ms. Best-effort: skipped when
+---no libuv timer is available (e.g. some headless test contexts).
+function Session:_arm_heartbeat()
+  local timeout = self.adapter.opts and self.adapter.opts.stream_heartbeat_timeout
+  if not timeout or timeout <= 0 then
+    return
+  end
+  local uv = vim.uv or vim.loop
+  if not uv or not uv.new_timer then
+    return
+  end
+  self:_cancel_heartbeat()
+  local timer = uv.new_timer()
+  if not timer then
+    return
+  end
+  self._hb_timer = timer
+  timer:start(timeout, 0, function()
+    vim.schedule(function()
+      self:_on_heartbeat_timeout()
+    end)
+  end)
+end
+
+---Cancel the heartbeat watchdog if armed.
+function Session:_cancel_heartbeat()
+  if self._hb_timer then
+    pcall(function()
+      self._hb_timer:stop()
+      self._hb_timer:close()
+    end)
+    self._hb_timer = nil
+  end
+end
+
+---Heartbeat expired: assume the stream is wedged and force a reconnect (unless a
+---live foreground turn owns it -- yanking that would lose in-flight output).
+function Session:_on_heartbeat_timeout()
+  if not self._stream or self:_foreground_active() then
+    return
+  end
+  log:debug("[Omnigent::Session] heartbeat timeout; forcing reconnect")
+  pcall(function()
+    self._stream.stop()
+  end)
+  self._stream = nil
+  self:_cancel_heartbeat()
+  if self.observer and self:_reconnect_enabled() then
+    self:_schedule_reconnect()
   end
 end
 
 ---Open the live SSE subscription (idempotent). Events flow through the reducer
----and each update is delivered to callbacks.on_update.
+---and each update is delivered to the foreground callback or the observer.
 ---@param opts? table
 ---@return table stream handle
 function Session:start_stream(opts)
   if self._stream then
     return self._stream
   end
-  opts = opts or {}
-  self._stream = self.client:stream_session(self.session_id, {
-    on_event = function(ev)
-      local ok, updates = pcall(function()
-        return self.reducer:handle(ev)
-      end)
-      if not ok then
-        if self.callbacks.on_error then
-          self.callbacks.on_error({ message = "reducer error: " .. tostring(updates) })
-        end
-        return
-      end
-      for _, u in ipairs(updates) do
-        self:_apply_state(u)
-        if self.callbacks.on_update then
-          self.callbacks.on_update(u)
-        end
-      end
-    end,
-    on_done = function(code)
-      self._stream = nil
-      if self.callbacks.on_stream_end then
-        self.callbacks.on_stream_end(code)
-      end
-    end,
-  })
+  self._stopping = false
+  self:_open_stream()
   return self._stream
 end
 
----Close the LOCAL SSE subscription. The durable server session is untouched.
+---Close the LOCAL SSE subscription. The durable server session is untouched. Sets
+---the stopping flag so the resulting on_done does not trigger a reconnect.
 function Session:stop_stream()
+  self._stopping = true
+  self:_cancel_heartbeat()
   if self._stream then
     pcall(function()
       self._stream.stop()

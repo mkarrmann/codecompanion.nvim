@@ -297,4 +297,17 @@ function Reducer:live_text(response_id)
   return self._text[response_id or self.current_response_id or ""] or ""
 end
 
+---Reset the in-flight accumulator for the current response so a reconnect replay
+---rebuilds it from scratch (the server replays the whole in-flight message on
+---/stream subscribe; without this the reducer would double-append it to the
+---pre-drop total). The response id is kept so replayed deltas keep the same key --
+---the observer then appends only the new suffix beyond what it already rendered.
+function Reducer:reset_inflight()
+  local rid = self.current_response_id
+  if rid then
+    self._text[rid] = ""
+    self._reasoning[rid] = ""
+  end
+end
+
 return M

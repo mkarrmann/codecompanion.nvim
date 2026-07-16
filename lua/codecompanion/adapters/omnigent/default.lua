@@ -35,14 +35,18 @@ return {
     -- harness_override = nil,
   },
   opts = {
-    -- RESERVED (Milestone 4): the session runtime does NOT yet reconnect a dropped
-    -- SSE stream. Correct reconnect requires reconciling against GET /items (a naive
-    -- reopen would double-render the in-flight text the stream replays on subscribe),
-    -- so these are intentionally not honored until M4 lands.
+    -- M4 passive streaming. When `background_updates` is true the session keeps its
+    -- SSE stream open at chat-attach and renders externally-triggered background
+    -- turns (wakeups) through the observer while the chat is idle. That also enables
+    -- auto-reconnect-on-drop with a GET /items reconcile (safe because the observer
+    -- renders content-based and dedups the stream-first replay). `stream_reconnect`
+    -- enables reconnect independently of background rendering. Reconnect is only ever
+    -- attempted when the observer -- not a live foreground turn -- owns the stream.
+    background_updates = false,
     stream_reconnect = false,
-    stream_heartbeat_timeout = 30000,
+    stream_heartbeat_timeout = 30000, -- ms of stream silence before a forced reconnect (0 disables)
+    reconnect_delay = 1000, -- ms before reopening a dropped stream
     history_page_size = 100, -- Page size for GET /items
-    background_updates = false, -- M4: render externally-triggered background turns while idle
   },
   handlers = {
     -- Omnigent handles auth server-side (trusted proxy / local user); nothing to

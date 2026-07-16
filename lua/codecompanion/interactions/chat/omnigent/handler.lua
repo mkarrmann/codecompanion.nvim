@@ -23,6 +23,7 @@
 local Session = require("codecompanion.omnigent.session")
 local config = require("codecompanion.config")
 local log = require("codecompanion.utils.log")
+local render = require("codecompanion.interactions.chat.omnigent.render")
 local utils = require("codecompanion.utils")
 
 ---@class CodeCompanion.Chat.OmnigentHandler
@@ -56,10 +57,15 @@ function OmnigentHandler:ensure_session()
   self._on_error = function(e)
     self:on_error(e)
   end
+  self._on_stream_end = function(code)
+    self:on_stream_end(code)
+  end
   session.callbacks.on_update = self._on_update
   session.callbacks.on_error = self._on_error
+  session.callbacks.on_stream_end = self._on_stream_end
 
   if session.session_id then
+    self:_ensure_observer()
     return true
   end
 
@@ -82,8 +88,31 @@ function OmnigentHandler:ensure_session()
       chat:update_metadata()
     end)
   end
+  self:_ensure_observer()
   utils.fire("OmnigentSessionReady", { bufnr = chat.bufnr, session_id = session.session_id })
   return true
+end
+
+---Install the persistent background observer and open the stream passively, so
+---background/wakeup turns render while the chat is idle. No-op unless the adapter
+---opts in via `opts.background_updates` (M4). The stream is idempotent, so a later
+---foreground submit reuses it.
+function OmnigentHandler:_ensure_observer()
+  local chat = self.chat
+  local session = chat.omnigent_session
+  if not session then
+    return
+  end
+  local opts = session.adapter and session.adapter.opts
+  if not (opts and opts.background_updates) then
+    return
+  end
+  if not chat.omnigent_observer then
+    local Observer = require("codecompanion.interactions.chat.omnigent.observer")
+    chat.omnigent_observer = Observer.new(chat)
+  end
+  session:set_observer(chat.omnigent_observer)
+  session:start_stream()
 end
 
 ---Hydrate the chat transcript + buffer from durable items (resume path). Items
@@ -236,15 +265,28 @@ function OmnigentHandler:on_update(u)
       self.chat:add_buf_message({ role = C.LLM_ROLE, content = u.delta }, { type = MT.REASONING_MESSAGE })
     end
   elseif k == "elicitation" then
-    -- Full native elicitation handling is Milestone 5. Until then, do NOT let a
-    -- foreground turn silently hang waiting on an approval: surface it and point
-    -- the user at the Omnigent UI. (We never auto-approve.)
-    self.chat:add_buf_message({
-      role = C.LLM_ROLE,
-      content = "\n> [!WARNING] Omnigent is waiting for an approval/elicitation. "
-        .. "Native elicitation handling is not implemented yet — resolve it in the Omnigent UI.\n",
-    }, { type = MT.SYSTEM_MESSAGE or MT.LLM_MESSAGE })
+    -- The turn is blocked server-side until this resolves; present it and resolve
+    -- via the session. We are the approval authority (never auto-approve).
+    require("codecompanion.interactions.chat.omnigent.elicitation").handle(self.chat, self.chat.omnigent_session, u)
+  elseif k == "elicitation_resolved" then
+    self.chat:add_buf_message(
+      { role = C.LLM_ROLE, content = "\n> ✓ approval resolved\n" },
+      { type = MT.SYSTEM_MESSAGE or MT.LLM_MESSAGE }
+    )
+  elseif k == "item_committed" then
+    self:_render_item(u)
+  elseif k == "child_session" or k == "child_session_created" then
+    self.chat:add_buf_message(
+      { role = C.LLM_ROLE, content = render.child_session_line(u) },
+      { type = MT.SYSTEM_MESSAGE or MT.LLM_MESSAGE }
+    )
+  elseif k == "policy_denied" then
+    self.chat:add_buf_message(
+      { role = C.LLM_ROLE, content = render.policy_denied_line(u) },
+      { type = MT.SYSTEM_MESSAGE or MT.LLM_MESSAGE }
+    )
   elseif k == "turn_completed" then
+    self:_fire_usage(u.usage) -- response.completed.usage carries context_tokens
     self:_complete("success")
   elseif k == "turn_failed" or k == "error" then
     self:_render_error(u.error or "omnigent turn failed")
@@ -252,6 +294,9 @@ function OmnigentHandler:on_update(u)
   elseif k == "interrupted" or k == "turn_cancelled" then
     self:_complete("cancelled")
   elseif k == "status" or k == "usage" or k == "model" then
+    if k == "usage" then
+      self:_fire_usage(u.usage)
+    end
     if self.chat.update_metadata then
       pcall(function()
         self.chat:update_metadata()
@@ -261,9 +306,48 @@ function OmnigentHandler:on_update(u)
   -- child_session / other: surfaced in M5.
 end
 
+---Fire a transport-neutral usage event so external consumers (winbar stats,
+---context-%) can update without reaching into omnigent internals.
+---@param usage any
+function OmnigentHandler:_fire_usage(usage)
+  utils.fire("OmnigentUsage", {
+    bufnr = self.chat.bufnr,
+    session_id = self.chat.omnigent_session_id,
+    usage = render.enrich_usage(usage, self.chat.omnigent_session),
+  })
+end
+
+---Render a committed durable item during a live turn. Assistant message text is
+---already streamed via deltas, so only tool calls get a compact marker here.
+---@param u CodeCompanion.Omnigent.Update
+function OmnigentHandler:_render_item(u)
+  local MT = self.chat.MESSAGE_TYPES
+  if u.item_type == "function_call" then
+    self.chat:add_buf_message(
+      { role = config.constants.LLM_ROLE, content = render.tool_call_line(u.item or { name = u.tool_name }) },
+      { type = MT.SYSTEM_MESSAGE or MT.LLM_MESSAGE }
+    )
+  end
+  -- function_call_output / message / resource_event: not rendered inline (output
+  -- is folded server-side; message text already streamed).
+end
+
 ---@param err table|string
 function OmnigentHandler:on_error(err)
   self:_render_error(err)
+  self:_complete("error")
+end
+
+---The stream ended. Only meaningful while a foreground turn is in flight: if it
+---drops before a terminal event, finish with an error so the input queue isn't
+---wedged. After completion this is a no-op (guarded by _done). Background-mode
+---reconnect is handled inside the session, not here.
+---@param code? number
+function OmnigentHandler:on_stream_end(code)
+  if self._done or not self.request_id then
+    return
+  end
+  self:_render_error("omnigent stream ended before the turn completed")
   self:_complete("error")
 end
 
@@ -279,6 +363,9 @@ function OmnigentHandler:_detach()
     end
     if s.callbacks.on_error == self._on_error then
       s.callbacks.on_error = nil
+    end
+    if s.callbacks.on_stream_end == self._on_stream_end then
+      s.callbacks.on_stream_end = nil
     end
   end
 end

@@ -45,6 +45,26 @@ T["unknown durable items become a compact system row"] = function()
   h.eq(m.opts.system, true)
 end
 
+T["tool_call_line names the tool"] = function()
+  h.is_true(render.tool_call_line({ name = "read_file" }):find("read_file", 1, true) ~= nil)
+  h.is_true(render.tool_call_line({ tool_name = "shell" }):find("shell", 1, true) ~= nil)
+end
+
+T["child_session_line shows title + status"] = function()
+  local line = render.child_session_line({
+    child_session_id = "conv_c",
+    child = { title = "claude:count", tool = "claude", current_task_status = "in_progress" },
+  })
+  h.is_true(line:find("claude:count", 1, true) ~= nil)
+  h.is_true(line:find("in_progress", 1, true) ~= nil)
+end
+
+T["policy_denied_line shows the reason and phase"] = function()
+  local line = render.policy_denied_line({ reason = "blocked path", phase = "pre_tool" })
+  h.is_true(line:find("blocked path", 1, true) ~= nil)
+  h.is_true(line:find("pre_tool", 1, true) ~= nil)
+end
+
 T["snapshot_messages maps a real /items page"] = function()
   local page = read_json("items-lifecycle.json")
   local msgs = render.snapshot_messages(page.data)

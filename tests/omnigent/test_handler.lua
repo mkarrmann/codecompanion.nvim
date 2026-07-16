@@ -267,6 +267,29 @@ T["bare resume via submit() is a clean no-op, not an error"] = function()
   h.is_true(chat.ready_calls >= 1) -- handed back to the user
 end
 
+T["elicitation during a foreground turn is presented and does not complete"] = function()
+  local chat, handler, cap = setup({})
+  handler:submit({})
+  local elicit = require("codecompanion.interactions.chat.omnigent.elicitation")
+  local orig = elicit.handle
+  local seen
+  elicit.handle = function(_, _, u)
+    seen = u
+  end
+  cap.drive.on_stdout(
+    'event: response.elicitation_request\n'
+      .. 'data: {"type":"response.elicitation_request","elicitation_id":"e1","method":"elicitation/create","params":{"message":"ok?"}}\n\n'
+  )
+  elicit.handle = orig
+
+  h.eq(seen.elicitation_id, "e1")
+  -- The turn is blocked on approval, not completed.
+  h.eq(chat.done_call, nil)
+  -- Pending elicitation is tracked on the session (drives update_metadata count).
+  h.is_true(chat.omnigent_session.pending_elicitations ~= nil)
+  h.is_true(chat.omnigent_session.pending_elicitations.e1 ~= nil)
+end
+
 T["done fires only once even if extra terminal events arrive"] = function()
   local chat, handler, cap = setup({})
   handler:submit({})

@@ -171,6 +171,39 @@ T["load fails loudly when item fetch errors (no silent empty)"] = function()
   h.is_true(err ~= nil)
 end
 
+T["ingests JSON null fields as nil (no vim.NIL model poisoning)"] = function()
+  local c = client.new({
+    url = "http://x",
+    hostname = "MacBook-Pro.local",
+    request = function(o)
+      if o.url:find("/v1/agents", 1, true) then
+        return { status = 200, body = read_raw("readonly-agents.json") }
+      elseif o.url:find("/v1/hosts", 1, true) then
+        return { status = 200, body = vim.json.encode({ hosts = MAC }) }
+      elseif o.method == "post" and o.url:find("/v1/sessions", 1, true) then
+        -- Server reports several fields as JSON null (common with claude-sdk).
+        return {
+          status = 200,
+          body = '{"id":"conv_1","status":"idle","llm_model":null,"model_override":null,"title":null}',
+        }
+      end
+      return { status = 404, body = "{}" }
+    end,
+  })
+  local s = session.new({
+    adapter = { type = "omnigent", url = "http://x", defaults = { agent = "claude-native-ui", host = "auto", workspace = "auto" }, opts = {} },
+    client = c,
+  })
+  local _, err = s:create()
+  h.eq(err, nil)
+  -- Null decodes to nil (absent), NOT vim.NIL (which is truthy and would win the
+  -- `model_override or model or "default"` chain).
+  h.eq(s.model, nil)
+  h.eq(s.model_override, nil)
+  h.eq(s.title, nil)
+  h.eq(s.model_override or s.model or "default", "default")
+end
+
 T["start_stream pipes reducer updates to on_update"] = function()
   local updates = {}
   local blob = read_raw("sse-clean-full.txt")
