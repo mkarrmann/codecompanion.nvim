@@ -25,6 +25,14 @@ local M = {}
 local Client = {}
 Client.__index = Client
 
+---@param url string
+---@return boolean
+local function is_loopback_url(url)
+  local authority = url:match("^https?://([^/]+)") or ""
+  local host = authority:match("^([^:]+)") or authority
+  return host == "127.0.0.1" or host == "localhost" or authority:match("^%[::1%][:/]?") ~= nil
+end
+
 --- Default synchronous REST transport (plenary.curl).
 ---@param o table { url, method, headers, body, timeout }
 ---@return table { status: number, body: string }
@@ -36,6 +44,7 @@ local function default_request(o)
     headers = o.headers,
     body = o.body,
     timeout = o.timeout,
+    raw = is_loopback_url(o.url) and { "--noproxy", "*" } or nil,
   })
 end
 
@@ -45,6 +54,10 @@ end
 ---@return table { stop: fun() }
 local function default_job(o)
   local args = { "curl", "-sS", "-N", o.url }
+  if is_loopback_url(o.url) then
+    table.insert(args, 2, "--noproxy")
+    table.insert(args, 3, "*")
+  end
   for k, v in pairs(o.headers or {}) do
     table.insert(args, "-H")
     table.insert(args, string.format("%s: %s", k, v))

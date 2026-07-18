@@ -103,6 +103,52 @@ T["normalises transport failures as retryable"] = function()
   h.eq(err.retryable, true)
 end
 
+T["default REST transport bypasses proxies only for loopback"] = function()
+  local curl = require("plenary.curl")
+  local original = curl.request
+  local captured = {}
+  curl.request = function(opts)
+    captured[#captured + 1] = opts
+    return { status = 200, body = '{"data":[]}' }
+  end
+
+  local ok, err = pcall(function()
+    client.new({ url = "http://127.0.0.1:6767" }):list_agents()
+    client.new({ url = "http://localhost:6767" }):list_agents()
+    client.new({ url = "https://omnigent.example.com" }):list_agents()
+  end)
+  curl.request = original
+  if not ok then
+    error(err)
+  end
+
+  h.eq(captured[1].raw, { "--noproxy", "*" })
+  h.eq(captured[2].raw, { "--noproxy", "*" })
+  h.eq(captured[3].raw, nil)
+end
+
+T["default SSE transport bypasses proxies only for loopback"] = function()
+  local original = vim.system
+  local captured = {}
+  vim.system = function(args)
+    captured[#captured + 1] = args
+    return { kill = function() end }
+  end
+
+  local ok, err = pcall(function()
+    local callbacks = { on_event = function() end }
+    client.new({ url = "http://127.0.0.1:6767" }):stream_session("one", callbacks)
+    client.new({ url = "https://omnigent.example.com" }):stream_session("two", callbacks)
+  end)
+  vim.system = original
+  if not ok then
+    error(err)
+  end
+
+  h.eq(vim.list_slice(captured[1], 1, 4), { "curl", "--noproxy", "*", "-sS" })
+  h.eq(vim.list_slice(captured[2], 1, 2), { "curl", "-sS" })
+end
+
 -- ---- Agent resolution (no prefix sniffing) --------------------------------
 
 T["resolve_agent: id match wins, then unique name"] = function()
