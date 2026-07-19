@@ -113,7 +113,9 @@ Chat contract mirrors ACP: accumulate assistant chunks in `handler.output`, hand
 - **Resume = `OmnigentHandler:resume()`** (load + hydrate, no post). NEVER resume through
   `submit()`; a blank/no-unsent submit is a clean no-op (`ready_for_input`), not an error.
 - **Hydration uses role-appropriate `MESSAGE_TYPES`** (`USER_MESSAGE` vs `LLM_MESSAGE`).
-- **Default to a claude-sdk agent** — `*-native-ui` (terminal) agents stream NO text to CC.
+- **Native support is explicit** — the built-in `claude-native-ui` and
+  `codex-native-ui` agents now normalize terminal output onto the session stream;
+  other native harnesses remain unvalidated.
 - **Adapter extend** — extend the family `"default"` via the family module
   (`require("codecompanion.adapters.omnigent").extend("default", {...})`); extending
   `"omnigent"` recurses and routing `"default"` through top-level `extend()` misfires to http.
@@ -268,11 +270,10 @@ suite.
 - Full turn with a **claude-sdk** agent (`polly`): `completed: true`,
   `deltas: "ok"`, `item_committed`, `turn_completed` — the reducer processed real
   live events end-to-end.
-- With **claude-native-ui** (a terminal harness) the turn completes but emits NO
-  `output_text` deltas — its output goes to the tmux terminal, not the SSE text
-  stream. => For CodeCompanion to render assistant text, default to a `claude-sdk`
-  agent (this is why the claude-sdk posture was chosen). The default agent in
-  `default.lua` is still `claude-native-ui` and should be overridden in dotfiles.
+- Older **claude-native-ui** validation observed no `output_text` deltas. Current
+  Omnigent native forwarders normalize built-in Claude/Codex native output onto
+  the session stream; retain SDK agents as fallbacks and validate native behavior
+  on each supported host class.
 
 ## Corrected-contract decisions honored
 

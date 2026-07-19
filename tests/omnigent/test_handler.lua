@@ -128,6 +128,27 @@ T["foreground turn: create -> stream -> post -> render -> complete"] = function(
   h.eq(table.concat(chat.done_call.output), "done.")
 end
 
+T["committed-only native assistant messages render without duplicating streamed text"] = function()
+  local chat, handler = setup({})
+  handler:_render_item({
+    item_type = "message",
+    role = "assistant",
+    text = "claude answer",
+    text_streamed = false,
+  })
+  h.eq(table.concat(handler.output), "claude answer")
+  h.eq(chat.buf_calls[#chat.buf_calls].content, "claude answer")
+
+  local before = #chat.buf_calls
+  handler:_render_item({
+    item_type = "message",
+    role = "assistant",
+    text = "codex answer",
+    text_streamed = true,
+  })
+  h.eq(#chat.buf_calls, before)
+end
+
 T["cancel posts an interrupt"] = function()
   local chat, handler, cap = setup({})
   local handle = handler:submit({})

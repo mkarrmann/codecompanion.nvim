@@ -33,6 +33,14 @@ function M.resume(chat, session_id)
   return handler:resume()
 end
 
+---Create or attach an Omnigent session without posting a chat message.
+---@param chat CodeCompanion.Chat
+---@return boolean ok, table|nil err
+function M.ensure_session(chat)
+  local handler = require("codecompanion.interactions.chat.omnigent.handler").new(chat)
+  return handler:ensure_session({ foreground = false })
+end
+
 ---Change the session model (delegates to the adapter family set_model).
 ---@param chat CodeCompanion.Chat
 ---@param model string
@@ -67,6 +75,9 @@ function M.session_meta(chat)
   return {
     session_id = s.session_id,
     agent_id = s.agent_id,
+    agent_name = s.agent_name,
+    harness = s.harness,
+    labels = s.labels,
     host_id = s.host_id,
     workspace = s.workspace,
     status = s.status,
@@ -75,6 +86,7 @@ function M.session_meta(chat)
     pending_elicitations = pending,
     streaming = s:streaming(),
     model = s.model_override or s.model or "default",
+    codex_goal = s.codex_goal,
   }
 end
 

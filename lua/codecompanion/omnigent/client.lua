@@ -21,6 +21,7 @@ local M = {}
 ---@field timeout number Request timeout (ms)
 ---@field hostname string This machine's hostname/FQDN (overridable for tests)
 ---@field _request fun(o: table): table Injectable REST transport
+---@field _async_request fun(o: table): table Injectable asynchronous REST transport
 ---@field _job? fun(o: table): table Injectable stream-job spawner
 local Client = {}
 Client.__index = Client
@@ -46,6 +47,44 @@ local function default_request(o)
     timeout = o.timeout,
     raw = is_loopback_url(o.url) and { "--noproxy", "*" } or nil,
   })
+end
+
+---Default asynchronous REST transport (curl via vim.system).
+---@param o table
+---@return table { stop: fun() }
+local function default_async_request(o)
+  local args = { "curl", "-sS", "--request", string.upper(o.method or "GET") }
+  if is_loopback_url(o.url) then
+    vim.list_extend(args, { "--noproxy", "*" })
+  end
+  vim.list_extend(args, { "--max-time", tostring(math.max(1, math.ceil((o.timeout or 30000) / 1000))) })
+  for k, v in pairs(o.headers or {}) do
+    vim.list_extend(args, { "-H", string.format("%s: %s", k, v) })
+  end
+  if o.body ~= nil then
+    vim.list_extend(args, { "--data-binary", "@-" })
+  end
+  vim.list_extend(args, { "--write-out", "\n%{http_code}", o.url })
+
+  local proc = vim.system(args, { text = true, stdin = o.body }, function(res)
+    vim.schedule(function()
+      local stdout = res.stdout or ""
+      local status = stdout:match("(%d%d%d)$")
+      local raw = status and stdout:sub(1, #stdout - #status - 1) or stdout
+      if res.code ~= 0 and (not status or status == "000") then
+        o.on_complete(nil, res.stderr or ("curl exited with status " .. tostring(res.code)))
+        return
+      end
+      o.on_complete({ status = tonumber(status), body = raw or stdout })
+    end)
+  end)
+  return {
+    stop = function()
+      pcall(function()
+        proc:kill(15)
+      end)
+    end,
+  }
 end
 
 --- Default async stream-job spawner (curl -N via vim.system). Feeds raw stdout
@@ -84,7 +123,7 @@ local function default_job(o)
   }
 end
 
----@param opts? table { url?, headers?, timeout?, hostname?, request?, job? }
+---@param opts? table { url?, headers?, timeout?, hostname?, request?, async_request?, job? }
 ---@return CodeCompanion.Omnigent.Client
 function M.new(opts)
   opts = opts or {}
@@ -94,14 +133,62 @@ function M.new(opts)
     timeout = opts.timeout or 30000,
     hostname = opts.hostname or (vim.uv or vim.loop).os_gethostname(),
     _request = opts.request or default_request,
+    _async_request = opts.async_request or default_async_request,
     _job = opts.job or default_job,
   }, Client)
+end
+
+local encode_query
+local normalize_error
+
+---Build a REST request transport payload.
+---@param client CodeCompanion.Omnigent.Client
+---@param method string
+---@param path string
+---@param opts table
+---@return table
+local function request_options(client, method, path, opts)
+  local url = client.url .. path
+  if opts.query and next(opts.query) then
+    url = url .. "?" .. encode_query(opts.query)
+  end
+  return {
+    url = url,
+    method = method,
+    headers = vim.tbl_extend("force", {
+      ["content-type"] = "application/json",
+      ["accept"] = "application/json",
+    }, client.headers, opts.headers or {}),
+    body = opts.body ~= nil and vim.json.encode(opts.body) or nil,
+    timeout = client.timeout,
+  }
+end
+
+---Decode a REST transport response.
+---@param resp table
+---@return table|nil result
+---@return table|nil err
+local function decode_response(resp)
+  local status = resp.status or resp.code
+  local raw = resp.body
+  local decoded
+  if type(raw) == "string" and raw ~= "" then
+    local dok, d = pcall(vim.json.decode, raw, { luanil = { object = true } })
+    if dok then
+      decoded = d
+    end
+  end
+
+  if not status or status < 200 or status >= 300 then
+    return nil, normalize_error(status, decoded, raw)
+  end
+  return decoded == nil and {} or decoded
 end
 
 ---URL-encode a query table.
 ---@param params table
 ---@return string
-local function encode_query(params)
+encode_query = function(params)
   local parts = {}
   for k, v in pairs(params) do
     if v ~= nil then
@@ -116,7 +203,7 @@ end
 ---@param decoded? table
 ---@param raw? string
 ---@return table
-local function normalize_error(status, decoded, raw)
+normalize_error = function(status, decoded, raw)
   local msg
   if decoded then
     local e = decoded.error
@@ -150,24 +237,7 @@ end
 ---@return table|nil err
 function Client:request(method, path, opts)
   opts = opts or {}
-  local url = self.url .. path
-  if opts.query and next(opts.query) then
-    url = url .. "?" .. encode_query(opts.query)
-  end
-  local headers = vim.tbl_extend("force", {
-    ["content-type"] = "application/json",
-    ["accept"] = "application/json",
-  }, self.headers, opts.headers or {})
-
-  local body = opts.body ~= nil and vim.json.encode(opts.body) or nil
-
-  local ok, resp = pcall(self._request, {
-    url = url,
-    method = method,
-    headers = headers,
-    body = body,
-    timeout = self.timeout,
-  })
+  local ok, resp = pcall(self._request, request_options(self, method, path, opts))
   if not ok or type(resp) ~= "table" then
     return nil, {
       message = "request failed: " .. tostring(resp),
@@ -176,23 +246,35 @@ function Client:request(method, path, opts)
     }
   end
 
-  local status = resp.status or resp.code
-  local raw = resp.body
-  local decoded
-  if type(raw) == "string" and raw ~= "" then
-    -- Decode JSON null as absent (nil), not vim.NIL. vim.NIL is truthy, so it
-    -- would poison `field or default` chains (e.g. session.llm_model=null →
-    -- vim.NIL model) and break `not body.has_more`-style pagination guards.
-    local dok, d = pcall(vim.json.decode, raw, { luanil = { object = true } })
-    if dok then
-      decoded = d
-    end
-  end
+  return decode_response(resp)
+end
 
-  if not status or status < 200 or status >= 300 then
-    return nil, normalize_error(status, decoded, raw)
+---Perform an asynchronous REST request.
+---@param method string
+---@param path string
+---@param opts? table { query?, body?, headers? }
+---@param callback fun(result: table|nil, err: table|nil)
+---@return table|nil request_handle
+function Client:request_async(method, path, opts, callback)
+  opts = opts or {}
+  local transport_opts = request_options(self, method, path, opts)
+  transport_opts.on_complete = function(resp, transport_error)
+    if type(resp) ~= "table" then
+      callback(nil, {
+        message = "request failed: " .. tostring(transport_error),
+        retryable = true,
+        action = "Is the omnigent server reachable at " .. self.url .. "?",
+      })
+      return
+    end
+    callback(decode_response(resp))
   end
-  return decoded == nil and {} or decoded
+  local ok, handle = pcall(self._async_request, transport_opts)
+  if not ok then
+    transport_opts.on_complete(nil, handle)
+    return nil
+  end
+  return handle
 end
 
 --- Follow OpenAI-style pagination, collecting every `data` element (capped).
@@ -292,6 +374,76 @@ function Client:resolve_elicitation(session_id, elicitation_id, result)
     "/v1/sessions/" .. session_id .. "/elicitations/" .. elicitation_id .. "/resolve",
     { body = result }
   )
+end
+
+-- ---- Codex Goal -----------------------------------------------------------
+
+---@param session_id string
+---@param callback fun(goal: table|nil, err: table|nil)
+---@return table|nil
+function Client:get_codex_goal(session_id, callback)
+  return self:request_async("get", "/v1/sessions/" .. session_id .. "/codex_goal", nil, function(body, err)
+    callback(body and body.goal or nil, err)
+  end)
+end
+
+---@param session_id string
+---@param goal table
+---@param callback fun(goal: table|nil, err: table|nil)
+---@return table|nil
+function Client:set_codex_goal(session_id, goal, callback)
+  local objective = type(goal.objective) == "string" and vim.trim(goal.objective) or ""
+  if objective == "" or vim.fn.strchars(objective) > 4000 then
+    callback(nil, { message = "Goal objective must contain 1 to 4000 characters", code = "invalid_goal" })
+    return nil
+  end
+  if goal.status ~= nil and goal.status ~= "active" and goal.status ~= "paused" then
+    callback(nil, { message = "Goal status must be active or paused", code = "invalid_goal_status" })
+    return nil
+  end
+  if goal.token_budget ~= nil and goal.token_budget ~= vim.NIL then
+    if type(goal.token_budget) ~= "number" or goal.token_budget <= 0 or goal.token_budget % 1 ~= 0 then
+      callback(nil, { message = "Goal token budget must be a positive integer", code = "invalid_goal_budget" })
+      return nil
+    end
+  end
+  local body = vim.tbl_extend("force", {}, goal, { objective = objective })
+  return self:request_async(
+    "put",
+    "/v1/sessions/" .. session_id .. "/codex_goal",
+    { body = body },
+    function(result, err)
+      callback(result and result.goal or nil, err)
+    end
+  )
+end
+
+---@param session_id string
+---@param status string
+---@param callback fun(goal: table|nil, err: table|nil)
+---@return table|nil
+function Client:update_codex_goal_status(session_id, status, callback)
+  if status ~= "active" and status ~= "paused" then
+    callback(nil, { message = "Goal status must be active or paused", code = "invalid_goal_status" })
+    return nil
+  end
+  return self:request_async(
+    "patch",
+    "/v1/sessions/" .. session_id .. "/codex_goal/status",
+    { body = { status = status } },
+    function(result, err)
+      callback(result and result.goal or nil, err)
+    end
+  )
+end
+
+---@param session_id string
+---@param callback fun(cleared: boolean|nil, err: table|nil)
+---@return table|nil
+function Client:clear_codex_goal(session_id, callback)
+  return self:request_async("delete", "/v1/sessions/" .. session_id .. "/codex_goal", nil, function(body, err)
+    callback(body and body.cleared == true, err)
+  end)
 end
 
 -- ---- Resolution (opaque ids, no prefix sniffing) ---------------------------

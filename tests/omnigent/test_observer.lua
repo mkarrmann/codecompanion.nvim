@@ -78,6 +78,24 @@ T["external user message renders as a user row and persists"] = function()
   h.eq(user_rows[1].content, "poke from elsewhere")
 end
 
+T["committed-only native assistant messages render and persist"] = function()
+  local obs, chat = new_observer()
+  obs:handle_update({
+    kind = "item_committed",
+    item_type = "message",
+    role = "assistant",
+    text = "claude answer",
+    text_streamed = false,
+    item_id = "msg_a",
+  })
+  h.eq(fs.rendered_text(chat, "llm_msg"), "claude answer")
+  obs:handle_update({ kind = "turn_completed", response_id = "resp_claude" })
+  local assistant = vim.tbl_filter(function(message)
+    return message.content == "claude answer"
+  end, chat.messages)
+  h.eq(#assistant, 1)
+end
+
 T["background failure surfaces a warning and clears partial"] = function()
   local obs, chat = new_observer()
   obs:handle_update({ kind = "message_delta", response_id = "__live__", delta = "partial", text = "partial" })

@@ -161,6 +161,137 @@ T["background delta with no open turn synthesises a background turn"] = function
   h.eq(updates[2].text, "hi")
 end
 
+T["native tool output deltas are normalised"] = function()
+  local r = events.new()
+  local updates = r:handle({
+    type = "response.function_call_output.delta",
+    json = { type = "response.function_call_output.delta", call_id = "call_1", delta = "output" },
+  })
+  h.eq(updates[1].kind, "tool_output_delta")
+  h.eq(updates[1].call_id, "call_1")
+  h.eq(updates[1].delta, "output")
+end
+
+T["native queue acknowledgement waits for the terminal-backed idle edge"] = function()
+  local r = events.new()
+  local started = r:handle({
+    type = "response.in_progress",
+    json = { type = "response.in_progress", response = { id = "resp_queue", model = "codex-native-ui" } },
+  })
+  h.eq(started[1].kind, "turn_started")
+  local acknowledged = r:handle({
+    type = "response.completed",
+    json = {
+      type = "response.completed",
+      response = { id = "resp_queue", model = "codex-native-ui", output = {} },
+    },
+  })
+  h.eq(#acknowledged, 0)
+
+  local delta = r:handle({
+    type = "response.output_text.delta",
+    json = { type = "response.output_text.delta", message_id = "native_message", delta = "ok" },
+  })
+  h.eq(delta[#delta].kind, "message_delta")
+  r:handle({
+    type = "session.input.consumed",
+    json = { type = "session.input.consumed", data = { item_id = "user_1", data = {} } },
+  })
+  local idle = r:handle({
+    type = "session.status",
+    json = { type = "session.status", status = "idle", response_id = "codex_turn" },
+  })
+  h.eq(idle[1].kind, "status")
+  h.eq(idle[2].kind, "turn_completed")
+  h.eq(idle[2].response_id, "codex_turn")
+  h.eq(r.current_response_id, nil)
+end
+
+T["native idle before input consumption is not terminal"] = function()
+  local r = events.new()
+  r:handle({
+    type = "response.in_progress",
+    json = { type = "response.in_progress", response = { id = "resp_queue", model = "claude-native-ui" } },
+  })
+  local pre_ack_idle = r:handle({ type = "session.status", json = { type = "session.status", status = "idle" } })
+  h.eq(#pre_ack_idle, 1)
+  h.eq(pre_ack_idle[1].kind, "status")
+  r:handle({
+    type = "response.completed",
+    json = { type = "response.completed", response = { id = "resp_queue", model = "claude-native-ui" } },
+  })
+  local early_idle = r:handle({ type = "session.status", json = { type = "session.status", status = "idle" } })
+  h.eq(#early_idle, 1)
+  h.eq(early_idle[1].kind, "status")
+
+  r:handle({
+    type = "session.input.consumed",
+    json = { type = "session.input.consumed", data = { item_id = "user_1", data = {} } },
+  })
+  local committed = r:handle({
+    type = "response.output_item.done",
+    json = {
+      type = "response.output_item.done",
+      item = {
+        id = "assistant_1",
+        response_id = "claude_turn",
+        type = "message",
+        role = "assistant",
+        content = { { type = "output_text", text = "ok" } },
+      },
+    },
+  })
+  h.eq(committed[1].text, "ok")
+  h.eq(committed[1].text_streamed, false)
+  local final_idle = r:handle({ type = "session.status", json = { type = "session.status", status = "idle" } })
+  h.eq(final_idle[2].kind, "turn_completed")
+end
+
+T["native input consumption is correlated by pending id"] = function()
+  local r = events.new()
+  r:expect_input("pending_current")
+  r:handle({
+    type = "response.in_progress",
+    json = { type = "response.in_progress", response = { id = "queue", model = "claude-native-ui" } },
+  })
+  r:handle({
+    type = "response.completed",
+    json = { type = "response.completed", response = { id = "queue", model = "claude-native-ui" } },
+  })
+  r:handle({
+    type = "session.input.consumed",
+    json = {
+      type = "session.input.consumed",
+      data = { item_id = "old", cleared_pending_id = "pending_old", data = {} },
+    },
+  })
+  r:handle({
+    type = "response.output_item.done",
+    json = { type = "response.output_item.done", item = { id = "old_output", type = "message", role = "assistant" } },
+  })
+  local idle = r:handle({ type = "session.status", json = { type = "session.status", status = "idle" } })
+  h.eq(#idle, 1)
+
+  r:handle({
+    type = "session.input.consumed",
+    json = {
+      type = "session.input.consumed",
+      data = { item_id = "current", cleared_pending_id = "pending_current", data = {} },
+    },
+  })
+  local waiting = r:handle({ type = "session.status", json = { type = "session.status", status = "idle" } })
+  h.eq(#waiting, 1)
+  r:handle({
+    type = "response.output_item.done",
+    json = {
+      type = "response.output_item.done",
+      item = { id = "current_output", type = "message", role = "assistant" },
+    },
+  })
+  local completed = r:handle({ type = "session.status", json = { type = "session.status", status = "idle" } })
+  h.eq(completed[2].kind, "turn_completed")
+end
+
 T["reopened stream (reconnect-B) replays no committed response events"] = function()
   -- The captured reconnect-B stream has zero response.* events, so a reducer
   -- fed only that stream produces no turn/message updates (the dedup crux:

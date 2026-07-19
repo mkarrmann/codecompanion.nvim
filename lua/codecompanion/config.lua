@@ -439,6 +439,25 @@ If you are providing code changes, use the insert_edit_into_file tool (if availa
             provider = providers.pickers, -- telescope|fzf_lua|mini_pick|snacks|default
           },
         },
+        ["goal"] = {
+          path = "interactions.chat.slash_commands.builtin.codex_goal",
+          description = "Manage the current Codex Goal",
+          ---@param opts { adapter: CodeCompanion.HTTPAdapter|CodeCompanion.ACPAdapter }
+          ---@return boolean
+          enabled = function(opts)
+            if not opts.adapter or opts.adapter.type ~= "omnigent" then
+              return false
+            end
+            local session = opts.chat and opts.chat.omnigent_session
+            if session and session.session_id then
+              return type(session.supports_codex_goal) == "function" and session:supports_codex_goal()
+            end
+            return opts.adapter.defaults and opts.adapter.defaults.agent == "codex-native-ui" or false
+          end,
+          opts = {
+            contains_code = false,
+          },
+        },
         ["fork"] = {
           path = "interactions.chat.slash_commands.builtin.fork",
           description = "Fork the current chat into a new chat buffer",

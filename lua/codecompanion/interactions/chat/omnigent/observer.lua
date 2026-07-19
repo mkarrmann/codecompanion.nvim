@@ -167,6 +167,7 @@ function Observer:handle_update(u)
   local writes_buffer = k == "turn_started"
     or k == "message_delta"
     or k == "reasoning_delta"
+    or k == "tool_output_delta"
     or k == "item_committed"
     or k == "child_session"
     or k == "child_session_created"
@@ -184,6 +185,10 @@ function Observer:handle_update(u)
     if config.display.chat.show_reasoning then
       self.chat:add_buf_message({ role = C.LLM_ROLE, content = u.delta }, { type = MT.REASONING_MESSAGE })
     end
+  elseif k == "tool_output_delta" then
+    self:_ensure_turn(u.response_id)
+    self:_ensure_header()
+    self.chat:add_buf_message({ role = C.LLM_ROLE, content = u.delta }, { type = MT.TOOL_MESSAGE })
   elseif k == "item_committed" then
     -- Externally-injected USER messages (driven from another client) should
     -- appear so the transcript stays coherent. Assistant text is already covered
@@ -209,6 +214,15 @@ function Observer:handle_update(u)
         { role = C.LLM_ROLE, content = render.tool_call_line(u.item or { name = u.tool_name }) },
         { type = MT.SYSTEM_MESSAGE or MT.LLM_MESSAGE }
       )
+    elseif
+      u.item_type == "message"
+      and u.role == "assistant"
+      and not u.text_streamed
+      and type(u.text) == "string"
+      and u.text ~= ""
+    then
+      self:_ensure_turn(u.response_id)
+      self:_render_text(u.text)
     end
   elseif k == "elicitation" then
     -- A background turn is waiting on approval; present it (we are the authority).

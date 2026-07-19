@@ -37,6 +37,8 @@ function SlashCommand:execute()
   local lines = {
     "Session:   " .. tostring(s.session_id),
     "Agent:     " .. tostring(s.agent_id or "?"),
+    "Agent name:" .. tostring(s.agent_name and (" " .. s.agent_name) or " ?"),
+    "Harness:   " .. tostring(s.harness or "?"),
     "Host:      " .. tostring(s.host_id or "(server-local)"),
     "Workspace: " .. tostring(s.workspace or "(none)"),
     "Status:    " .. tostring(s.status or "?"),
@@ -52,6 +54,13 @@ function SlashCommand:execute()
       ctx = ctx .. " / " .. tostring(s.usage.context_window)
     end
     lines[#lines + 1] = "Context:   " .. ctx .. " tokens"
+  end
+  if type(s.codex_goal) == "table" then
+    local usage = tostring(s.codex_goal.tokens_used or 0)
+    if s.codex_goal.token_budget then
+      usage = usage .. " / " .. tostring(s.codex_goal.token_budget)
+    end
+    lines[#lines + 1] = "Goal:      " .. tostring(s.codex_goal.status or "?") .. " (" .. usage .. " tokens)"
   end
   utils.notify(table.concat(lines, "\n"), vim.log.levels.INFO)
 end

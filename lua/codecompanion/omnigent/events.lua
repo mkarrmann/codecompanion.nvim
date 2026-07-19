@@ -34,6 +34,12 @@ local M = {}
 ---@field reasoning_effort? string
 ---@field _text table<string,string> Accumulated assistant text per response id
 ---@field _reasoning table<string,string> Accumulated (transient) reasoning per response id
+---@field _native_pending boolean A terminal-backed input is still running after its queue acknowledgement
+---@field _native_input_consumed boolean The terminal-backed runner consumed the queued input
+---@field _native_turn_started boolean The terminal-backed runner began producing the real turn
+---@field _native_queue_response boolean The open response belongs to native input delivery, not model output
+---@field _message_delta_seen boolean The current logical turn emitted assistant text deltas
+---@field _expected_pending_id? string Pending input owned by the foreground CodeCompanion request
 local Reducer = {}
 Reducer.__index = Reducer
 
@@ -72,7 +78,19 @@ function M.new()
     reasoning_effort = nil,
     _text = {},
     _reasoning = {},
+    _native_pending = false,
+    _native_input_consumed = false,
+    _native_turn_started = false,
+    _native_queue_response = false,
+    _message_delta_seen = false,
+    _expected_pending_id = nil,
   }, Reducer)
+end
+
+---Correlate the next consumed native input with the POST response.
+---@param pending_id? string
+function Reducer:expect_input(pending_id)
+  self._expected_pending_id = pending_id
 end
 
 ---Extract the plain text of an assistant message item's content blocks.
@@ -136,6 +154,7 @@ local function open_turn(self, rid, model, background)
     self.model = model
   end
   self._text[rid] = self._text[rid] or ""
+  self._message_delta_seen = false
   return { kind = "turn_started", response_id = rid, model = model or self.model, background = background }
 end
 
@@ -148,6 +167,17 @@ local function close_turn(self, rid)
   elseif not rid then
     self.current_response_id = nil
   end
+end
+
+---Clear terminal-backed turn correlation state.
+---@param self CodeCompanion.Omnigent.Reducer
+local function reset_native(self)
+  self._native_pending = false
+  self._native_input_consumed = false
+  self._native_turn_started = false
+  self._native_queue_response = false
+  self._message_delta_seen = false
+  self._expected_pending_id = nil
 end
 
 ---Normalise a decoded SSE event into zero or more updates.
@@ -173,6 +203,7 @@ function Reducer:handle(event)
   -- ----- Response lifecycle (id/model bearing) -----------------------------
   if t == "response.created" or t == "response.in_progress" then
     local r = j.response or {}
+    self._native_queue_response = type(r.model) == "string" and r.model:match("%-native%-ui$") ~= nil
     local u = open_turn(self, r.id, r.model, false)
     return u and { u } or {}
   elseif t == "response.output_text.delta" then
@@ -189,6 +220,10 @@ function Reducer:handle(event)
       end
     end
     self._text[rid] = (self._text[rid] or "") .. (j.delta or "")
+    self._message_delta_seen = true
+    if self._native_pending then
+      self._native_turn_started = true
+    end
     updates[#updates + 1] =
       { kind = "message_delta", response_id = rid, delta = j.delta or "", text = self._text[rid] }
     return updates
@@ -197,6 +232,9 @@ function Reducer:handle(event)
   elseif t == "response.reasoning_text.delta" or t == "response.reasoning_summary_text.delta" then
     local rid = self.current_response_id or "__live__"
     self._reasoning[rid] = (self._reasoning[rid] or "") .. (j.delta or "")
+    if self._native_pending then
+      self._native_turn_started = true
+    end
     return {
       {
         kind = "reasoning_delta",
@@ -206,8 +244,23 @@ function Reducer:handle(event)
         summary = t == "response.reasoning_summary_text.delta",
       },
     }
+  elseif t == "response.function_call_output.delta" then
+    if self._native_pending then
+      self._native_turn_started = true
+    end
+    return {
+      {
+        kind = "tool_output_delta",
+        response_id = self.current_response_id,
+        call_id = j.call_id,
+        delta = j.delta or "",
+      },
+    }
   elseif t == "response.output_item.done" then
     local item = j.item or {}
+    if self._native_pending then
+      self._native_turn_started = true
+    end
     local rid = item.response_id or self.current_response_id
     local update = {
       kind = "item_committed",
@@ -216,6 +269,7 @@ function Reducer:handle(event)
       item_type = item.type,
       role = item.role,
       item = item,
+      text_streamed = self._message_delta_seen,
     }
     if item.type == "message" then
       update.text = item_text(item)
@@ -226,6 +280,14 @@ function Reducer:handle(event)
     return { update }
   elseif t == "response.completed" then
     local r = j.response or {}
+    if type(r.model) == "string" and r.model:match("%-native%-ui$") and r.usage == nil then
+      self._native_pending = true
+      self._native_input_consumed = false
+      self._native_turn_started = false
+      self._native_queue_response = false
+      close_turn(self, r.id)
+      return {}
+    end
     local rid = r.id or self.current_response_id
     local u = { kind = "turn_completed", response_id = rid, model = r.model, usage = normalize_usage(r.usage) }
     close_turn(self, rid)
@@ -237,12 +299,14 @@ function Reducer:handle(event)
     local rid = r.id or self.current_response_id
     local u = { kind = "turn_failed", response_id = rid, error = r.error }
     close_turn(self, rid)
+    reset_native(self)
     return { u }
   elseif t == "response.cancelled" then
     local r = j.response or {}
     local rid = r.id or self.current_response_id
     local u = { kind = "turn_cancelled", response_id = rid }
     close_turn(self, rid)
+    reset_native(self)
     return { u }
   elseif t == "response.error" then
     return {
@@ -266,10 +330,33 @@ function Reducer:handle(event)
 
   -- ----- Session-level -----------------------------------------------------
   if t == "session.status" then
-    return { { kind = "status", status = j.status, response_id = j.response_id, error = j.error } }
+    local status = { kind = "status", status = j.status, response_id = j.response_id, error = j.error }
+    if
+      j.status == "idle"
+      and (
+        (self._native_pending and self._native_input_consumed and self._native_turn_started)
+        or (self.current_response_id and not self._native_queue_response)
+      )
+    then
+      local rid = j.response_id or self.current_response_id
+      local current = self.current_response_id
+      close_turn(self, nil)
+      self._message_delta_seen = false
+      reset_native(self)
+      if current then
+        self._text[current] = nil
+        self._reasoning[current] = nil
+      end
+      return { status, { kind = "turn_completed", response_id = rid, native = true } }
+    end
+    if j.status == "running" and self._native_pending and self._native_input_consumed and j.response_id then
+      self._native_turn_started = true
+    end
+    return { status }
   elseif t == "session.interrupted" then
     local rid = j.data and j.data.response_id or self.current_response_id
     close_turn(self, nil)
+    reset_native(self)
     return { { kind = "interrupted", response_id = rid } }
   elseif t == "session.usage" then
     return { { kind = "usage", usage = normalize_usage(j) } }
@@ -283,6 +370,12 @@ function Reducer:handle(event)
     return { { kind = "model", model_options = j.model_options or j.options or j.models } }
   elseif t == "session.input.consumed" then
     local d = j.data or {}
+    local matches_expected = not self._expected_pending_id or d.cleared_pending_id == self._expected_pending_id
+    if self._native_pending and matches_expected then
+      self._native_input_consumed = true
+      self._native_turn_started = false
+      self._expected_pending_id = nil
+    end
     return { { kind = "input_consumed", item_id = d.item_id, message = d.data } }
   elseif t == "session.child_session.updated" then
     return { { kind = "child_session", child_session_id = j.child_session_id, child = j.child } }

@@ -94,7 +94,10 @@ local function slash_command_items(chat)
   local items = {}
   local slash_commands = config.interactions.chat.slash_commands
 
-  local filtered = slash_command_filter.filter_enabled_slash_commands(slash_commands, { adapter = chat.adapter })
+  local filtered = slash_command_filter.filter_enabled_slash_commands(
+    slash_commands,
+    { adapter = chat.adapter, chat = chat }
+  )
 
   for name, cmd_config in pairs(filtered) do
     if name == "opts" then

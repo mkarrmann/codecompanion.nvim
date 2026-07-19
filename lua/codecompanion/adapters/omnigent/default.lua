@@ -18,11 +18,9 @@ return {
     user = "user",
   },
   defaults = {
-    -- Default agent name or id. NOTE: for the elicitation-gated posture (where
-    -- CodeCompanion is the approval authority) configure a `claude-sdk`-harness
-    -- agent (e.g. one like `polly`) rather than a `*-native-ui` agent, which runs
-    -- host-side in a bypass/permission-less mode and never surfaces elicitations
-    -- to the client. Override this in your own adapter config.
+    -- Default agent name or id. Built-in Claude/Codex native agents normalize
+    -- their output and Omnigent policy elicitations onto the ordinary session
+    -- stream; their vendor rules and tool surface remain authoritative.
     agent = "claude-native-ui",
     -- Host binding: "auto" (fail-closed FQDN match), an explicit host id, or a
     -- host name. See omnigent/client.lua:resolve_host.

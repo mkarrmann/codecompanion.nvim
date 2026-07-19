@@ -94,10 +94,11 @@ function M.slash_commands(interaction)
 
   local bufnr = api.nvim_get_current_buf()
   local adapter_info = adapter_cache[bufnr]
+  local chat = require("codecompanion.interactions.chat").buf_get_chat(bufnr)
 
   local filtered_slash_commands = slash_command_filter.filter_enabled_slash_commands(
     config.interactions.chat.slash_commands,
-    { adapter = adapter_info }
+    { adapter = adapter_info, chat = chat }
   )
 
   local slash_commands = vim

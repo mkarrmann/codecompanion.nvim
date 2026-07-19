@@ -24,6 +24,9 @@ local log = require("codecompanion.utils.log")
 ---@field adapter CodeCompanion.OmnigentAdapter
 ---@field session_id? string
 ---@field agent_id? string
+---@field agent_name? string
+---@field harness? string
+---@field labels? table
 ---@field host_id? string
 ---@field workspace? string
 ---@field status? string
@@ -34,6 +37,7 @@ local log = require("codecompanion.utils.log")
 ---@field context_window? integer Context window (tokens) of the active model, from the session snapshot
 ---@field usage_by_model? table Per-model token/cost breakdown, from the session snapshot
 ---@field title? string
+---@field codex_goal? table
 ---@field reducer CodeCompanion.Omnigent.Reducer
 ---@field callbacks table { on_update?, on_error?, on_stream_end?, on_lifecycle? }
 ---@field _stream? table
@@ -93,6 +97,7 @@ function Session.new(opts)
       url = adapter and adapter.url,
       headers = adapter and adapter.env and adapter.env.headers or nil,
       request = opts.request,
+      async_request = opts.async_request,
       job = opts.job,
     })
   return setmetatable({
@@ -197,6 +202,9 @@ function Session:_ingest_snapshot(s)
   end
   self.session_id = nn(s.id) or self.session_id
   self.agent_id = nn(s.agent_id) or self.agent_id
+  self.agent_name = nn(s.agent_name) or self.agent_name
+  self.harness = nn(s.harness) or self.harness
+  self.labels = nn(s.labels) or self.labels
   self.host_id = nn(s.host_id) or self.host_id
   self.workspace = nn(s.workspace) or self.workspace
   self.status = nn(s.status) or self.status
@@ -210,6 +218,85 @@ function Session:_ingest_snapshot(s)
   self.context_window = nn(s.context_window) or self.context_window
   self.usage_by_model = nn(s.usage_by_model) or self.usage_by_model
   self.title = nn(s.title) or self.title
+end
+
+---Whether the server snapshot authorizes Codex Goal operations.
+---@return boolean
+function Session:supports_codex_goal()
+  return type(self.labels) == "table" and self.labels["omnigent.wrapper"] == "codex-native-ui"
+end
+
+---Validate that this session can perform Codex Goal operations.
+---@param callback function
+---@return boolean
+function Session:_require_codex_goal(callback)
+  if not self.session_id then
+    callback(nil, { message = "No active Omnigent session", code = "session_required" })
+    return false
+  end
+  if not self:supports_codex_goal() then
+    callback(nil, { message = "Codex Goal requires a codex-native-ui session", code = "goal_unsupported" })
+    return false
+  end
+  return true
+end
+
+---@param callback fun(goal: table|nil, err: table|nil)
+---@return table|nil
+function Session:get_codex_goal(callback)
+  if not self:_require_codex_goal(callback) then
+    return nil
+  end
+  return self.client:get_codex_goal(self.session_id, function(goal, err)
+    if not err then
+      self.codex_goal = goal
+    end
+    callback(goal, err)
+  end)
+end
+
+---@param goal table
+---@param callback fun(goal: table|nil, err: table|nil)
+---@return table|nil
+function Session:set_codex_goal(goal, callback)
+  if not self:_require_codex_goal(callback) then
+    return nil
+  end
+  return self.client:set_codex_goal(self.session_id, goal, function(updated, err)
+    if not err then
+      self.codex_goal = updated
+    end
+    callback(updated, err)
+  end)
+end
+
+---@param status string
+---@param callback fun(goal: table|nil, err: table|nil)
+---@return table|nil
+function Session:set_codex_goal_status(status, callback)
+  if not self:_require_codex_goal(callback) then
+    return nil
+  end
+  return self.client:update_codex_goal_status(self.session_id, status, function(updated, err)
+    if not err then
+      self.codex_goal = updated
+    end
+    callback(updated, err)
+  end)
+end
+
+---@param callback fun(cleared: boolean|nil, err: table|nil)
+---@return table|nil
+function Session:clear_codex_goal(callback)
+  if not self:_require_codex_goal(callback) then
+    return nil
+  end
+  return self.client:clear_codex_goal(self.session_id, function(cleared, err)
+    if cleared then
+      self.codex_goal = nil
+    end
+    callback(cleared, err)
+  end)
 end
 
 ---Create a new durable session.
@@ -585,10 +672,14 @@ end
 ---@param text string
 ---@return table|nil, table|nil
 function Session:post_message(text)
-  return self.client:post_event(self.session_id, {
+  local result, err = self.client:post_event(self.session_id, {
     type = "message",
     data = { role = "user", content = { { type = "input_text", text = text } } },
   })
+  if result and result.pending_id then
+    self.reducer:expect_input(result.pending_id)
+  end
+  return result, err
 end
 
 ---Interrupt the active turn (does NOT stop or delete the session).

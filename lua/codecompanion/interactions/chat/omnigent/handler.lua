@@ -43,37 +43,41 @@ end
 
 ---Ensure a live session runtime exists (create new or load + hydrate existing) and
 ---bind its update/error callbacks to THIS handler (stored so we can detach later).
+---@param opts? table { foreground?: boolean }
 ---@return boolean ok, table|nil err
-function OmnigentHandler:ensure_session()
+function OmnigentHandler:ensure_session(opts)
+  opts = opts or {}
   local chat = self.chat
   if not chat.omnigent_session then
     chat.omnigent_session = Session.new({ adapter = chat.adapter, callbacks = {} })
   end
   local session = chat.omnigent_session
 
-  self._on_update = function(u)
-    self:on_update(u)
-  end
-  self._on_error = function(e)
-    self:on_error(e)
-  end
-  self._on_stream_end = function(code)
-    self:on_stream_end(code)
-  end
-  session.callbacks.on_update = self._on_update
-  session.callbacks.on_error = self._on_error
-  session.callbacks.on_stream_end = self._on_stream_end
-  session.callbacks.on_lifecycle = function(update, current_session)
-    utils.fire("OmnigentLifecycle", {
-      bufnr = chat.bufnr,
-      session_id = current_session.session_id,
-      kind = update.kind,
-      response_id = update.response_id,
-      active_response_id = current_session.reducer.current_response_id,
-      status = current_session.status,
-      pending_elicitations = vim.tbl_count(current_session.pending_elicitations or {}),
-      error = update.error,
-    })
+  if opts.foreground ~= false then
+    self._on_update = function(u)
+      self:on_update(u)
+    end
+    self._on_error = function(e)
+      self:on_error(e)
+    end
+    self._on_stream_end = function(code)
+      self:on_stream_end(code)
+    end
+    session.callbacks.on_update = self._on_update
+    session.callbacks.on_error = self._on_error
+    session.callbacks.on_stream_end = self._on_stream_end
+    session.callbacks.on_lifecycle = function(update, current_session)
+      utils.fire("OmnigentLifecycle", {
+        bufnr = chat.bufnr,
+        session_id = current_session.session_id,
+        kind = update.kind,
+        response_id = update.response_id,
+        active_response_id = current_session.reducer.current_response_id,
+        status = current_session.status,
+        pending_elicitations = vim.tbl_count(current_session.pending_elicitations or {}),
+        error = update.error,
+      })
+    end
   end
 
   if session.session_id then
@@ -101,6 +105,7 @@ function OmnigentHandler:ensure_session()
     end)
   end
   self:_ensure_observer()
+  utils.fire("ChatRefreshCache", { bufnr = chat.bufnr })
   utils.fire("OmnigentSessionReady", { bufnr = chat.bufnr, session_id = session.session_id })
   return true
 end
@@ -276,6 +281,8 @@ function OmnigentHandler:on_update(u)
     if config.display.chat.show_reasoning then
       self.chat:add_buf_message({ role = C.LLM_ROLE, content = u.delta }, { type = MT.REASONING_MESSAGE })
     end
+  elseif k == "tool_output_delta" then
+    self.chat:add_buf_message({ role = C.LLM_ROLE, content = u.delta }, { type = MT.TOOL_MESSAGE })
   elseif k == "elicitation" then
     -- The turn is blocked server-side until this resolves; present it and resolve
     -- via the session. We are the approval authority (never auto-approve).
@@ -343,9 +350,20 @@ function OmnigentHandler:_render_item(u)
       { role = config.constants.LLM_ROLE, content = render.tool_call_line(u.item or { name = u.tool_name }) },
       { type = MT.SYSTEM_MESSAGE or MT.LLM_MESSAGE }
     )
+  elseif
+    u.item_type == "message"
+    and u.role == "assistant"
+    and not u.text_streamed
+    and type(u.text) == "string"
+    and u.text ~= ""
+  then
+    table.insert(self.output, u.text)
+    self.chat:add_buf_message(
+      { role = config.constants.LLM_ROLE, content = u.text },
+      { type = MT.LLM_MESSAGE }
+    )
   end
-  -- function_call_output / message / resource_event: not rendered inline (output
-  -- is folded server-side; message text already streamed).
+  -- Function-call output and resource events are folded or setup-only.
 end
 
 ---@param err table|string

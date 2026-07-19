@@ -172,6 +172,59 @@ T["create ingests context and per-model usage from the snapshot"] = function()
   h.eq(s.usage_by_model.codex.input_tokens, 10)
 end
 
+T["snapshot identity gates Codex Goal support by wrapper label"] = function()
+  local s = make({ agent = "codex-native-ui" }, "MacBook-Pro.local", { hosts = MAC })
+  s:_ingest_snapshot({
+    id = "conv_goal",
+    agent_id = "ag_codex",
+    agent_name = "codex-native-ui",
+    harness = "codex-native",
+    labels = { ["omnigent.wrapper"] = "codex-native-ui", ["omnigent.ui"] = "terminal" },
+  })
+  h.eq(s.agent_name, "codex-native-ui")
+  h.eq(s.harness, "codex-native")
+  h.eq(s:supports_codex_goal(), true)
+
+  s.labels["omnigent.wrapper"] = "custom-native"
+  h.eq(s:supports_codex_goal(), false)
+end
+
+T["session Goal methods cache successful results"] = function()
+  local s = make({ agent = "codex-native-ui" }, "MacBook-Pro.local", { hosts = MAC })
+  s.session_id = "conv_goal"
+  s.labels = { ["omnigent.wrapper"] = "codex-native-ui" }
+  s.client.get_codex_goal = function(_, id, callback)
+    h.eq(id, "conv_goal")
+    callback({ objective = "one", status = "active" })
+  end
+  s.client.update_codex_goal_status = function(_, _, status, callback)
+    callback({ objective = "one", status = status })
+  end
+  s.client.clear_codex_goal = function(_, _, callback)
+    callback(true)
+  end
+
+  s:get_codex_goal(function(goal)
+    h.eq(goal.objective, "one")
+  end)
+  h.eq(s.codex_goal.status, "active")
+  s:set_codex_goal_status("paused", function() end)
+  h.eq(s.codex_goal.status, "paused")
+  s:clear_codex_goal(function() end)
+  h.eq(s.codex_goal, nil)
+end
+
+T["session Goal methods reject unsupported wrappers"] = function()
+  local s = make({ agent = "codex-native-ui" }, "MacBook-Pro.local", { hosts = MAC })
+  s.session_id = "conv_goal"
+  s.labels = { ["omnigent.wrapper"] = "not-codex-native-ui" }
+  local got
+  s:get_codex_goal(function(_, err)
+    got = err
+  end)
+  h.eq(got.code, "goal_unsupported")
+end
+
 T["load fails loudly when item fetch errors (no silent empty)"] = function()
   local c = client.new({
     url = "http://x",

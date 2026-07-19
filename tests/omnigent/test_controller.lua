@@ -52,4 +52,28 @@ T["close stops the stream (no-op without a session)"] = function()
   controller.close({})
 end
 
+T["ensure_session delegates without binding a foreground request"] = function()
+  local handler_module = "codecompanion.interactions.chat.omnigent.handler"
+  local original = package.loaded[handler_module]
+  local received
+  package.loaded[handler_module] = {
+    new = function()
+      return {
+        ensure_session = function(_, opts)
+          received = opts
+          return true
+        end,
+      }
+    end,
+  }
+  local ok, err = pcall(function()
+    h.eq(controller.ensure_session({}), true)
+    h.eq(received.foreground, false)
+  end)
+  package.loaded[handler_module] = original
+  if not ok then
+    error(err)
+  end
+end
+
 return T
