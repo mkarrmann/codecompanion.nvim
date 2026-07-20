@@ -104,6 +104,41 @@ T["usage is normalised"] = function()
   h.eq(type(usage[1].usage.by_model), "table")
 end
 
+T["usage normalises native token and context field names"] = function()
+  local r = events.new()
+  local updates = r:handle({
+    type = "session.usage",
+    json = {
+      input_tokens = 120,
+      output_tokens = 30,
+      context_length = 200000,
+      cost_usd = 0.25,
+      by_model = { codex = { input_tokens = 120, output_tokens = 30 } },
+    },
+  })
+
+  h.eq(updates[1].usage.context_tokens, 150)
+  h.eq(updates[1].usage.context_window, 200000)
+  h.eq(updates[1].usage.total_cost_usd, 0.25)
+  h.eq(type(updates[1].usage.by_model.codex), "table")
+end
+
+T["response completion usage uses the same normalised shape"] = function()
+  local r = events.new()
+  local updates = r:handle({
+    type = "response.completed",
+    json = {
+      response = {
+        id = "resp_native",
+        usage = { prompt_tokens = 80, completion_tokens = 20, max_context = 128000 },
+      },
+    },
+  })
+
+  h.eq(updates[1].usage.context_tokens, 100)
+  h.eq(updates[1].usage.context_window, 128000)
+end
+
 T["interrupt yields an interrupted update and clears the open turn"] = function()
   local updates, r = run_jsonl("sse-interrupt.jsonl")
   local interrupted = by_kind(updates, "interrupted")

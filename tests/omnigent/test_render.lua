@@ -65,6 +65,16 @@ T["policy_denied_line shows the reason and phase"] = function()
   h.is_true(line:find("pre_tool", 1, true) ~= nil)
 end
 
+T["enrich_usage falls back to the session context window"] = function()
+  local source = { context_tokens = 123 }
+  local enriched = render.enrich_usage(source, { context_window = 200000 })
+  h.eq(enriched.context_window, 200000)
+  h.eq(source.context_window, nil)
+
+  local explicit = render.enrich_usage({ context_window = 128000 }, { context_window = 200000 })
+  h.eq(explicit.context_window, 128000)
+end
+
 T["snapshot_messages maps a real /items page"] = function()
   local page = read_json("items-lifecycle.json")
   local msgs = render.snapshot_messages(page.data)

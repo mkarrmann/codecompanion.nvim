@@ -112,14 +112,19 @@ function M.policy_denied_line(u)
   return "\n> ⛔ **policy denied**" .. phase .. ": " .. reason .. "\n"
 end
 
----Enrich a usage table with a context_window pulled from the session's model
----catalog when the usage event omitted it (claude-sdk usage often nulls it). Pure;
+---Enrich a usage table with a context_window pulled from the session when the
+---usage event omitted it (the SSE session.usage event nulls context_window).
+---The session snapshot exposes the active model's window directly; fall back to
+---a per-model catalog entry if the server ever populates model_options. Pure;
 ---returns a copy.
 ---@param usage any
 ---@param session? table
 ---@return table
 function M.enrich_usage(usage, session)
   usage = type(usage) == "table" and vim.deepcopy(usage) or {}
+  if not usage.context_window and session then
+    usage.context_window = session.context_window
+  end
   if not usage.context_window and session then
     local opts = session.model_options
     local cur = session.model_override or session.model

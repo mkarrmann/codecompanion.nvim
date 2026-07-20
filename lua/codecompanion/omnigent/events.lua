@@ -91,6 +91,36 @@ local function item_text(item)
   return table.concat(parts, "")
 end
 
+---Normalise a raw usage table to the shape the UI consumes:
+---`{ context_tokens, context_window, total_cost_usd, by_model }`. The field
+---spelling depends on the underlying harness: the claude-sdk harness reports
+---`context_tokens`/`context_window` (session.usage), whereas the codex
+---app-server surfaces token counts under input/output/total keys on the
+---response object. Map the common spellings so a token count is captured
+---regardless of harness. Unknown fields stay nil (dropped, not zeroed) so a
+---missing value is distinguishable from a real zero downstream.
+---@param u any
+---@return table|nil
+local function normalize_usage(u)
+  if type(u) ~= "table" then
+    return nil
+  end
+  local ctx = u.context_tokens or u.total_tokens or u.tokens
+  if not ctx then
+    local inp = u.input_tokens or u.prompt_tokens
+    local out = u.output_tokens or u.completion_tokens
+    if inp or out then
+      ctx = (inp or 0) + (out or 0)
+    end
+  end
+  return {
+    context_tokens = ctx,
+    context_window = u.context_window or u.context_length or u.max_context or u.window_size,
+    total_cost_usd = u.total_cost_usd or u.cost_usd,
+    by_model = u.usage_by_model or u.by_model,
+  }
+end
+
 ---Open a turn for `rid` if none is open, returning a turn_started update or nil.
 ---@param self CodeCompanion.Omnigent.Reducer
 ---@param rid string
@@ -197,7 +227,7 @@ function Reducer:handle(event)
   elseif t == "response.completed" then
     local r = j.response or {}
     local rid = r.id or self.current_response_id
-    local u = { kind = "turn_completed", response_id = rid, model = r.model, usage = r.usage }
+    local u = { kind = "turn_completed", response_id = rid, model = r.model, usage = normalize_usage(r.usage) }
     close_turn(self, rid)
     self._text[rid] = nil
     self._reasoning[rid] = nil
@@ -242,17 +272,7 @@ function Reducer:handle(event)
     close_turn(self, nil)
     return { { kind = "interrupted", response_id = rid } }
   elseif t == "session.usage" then
-    return {
-      {
-        kind = "usage",
-        usage = {
-          context_tokens = j.context_tokens,
-          context_window = j.context_window,
-          total_cost_usd = j.total_cost_usd,
-          by_model = j.usage_by_model,
-        },
-      },
-    }
+    return { { kind = "usage", usage = normalize_usage(j) } }
   elseif t == "session.model" then
     self.model = j.model
     return { { kind = "model", model = j.model } }

@@ -31,6 +31,8 @@ local log = require("codecompanion.utils.log")
 ---@field model_override? string
 ---@field reasoning_effort? string
 ---@field model_options? table
+---@field context_window? integer Context window (tokens) of the active model, from the session snapshot
+---@field usage_by_model? table Per-model token/cost breakdown, from the session snapshot
 ---@field title? string
 ---@field reducer CodeCompanion.Omnigent.Reducer
 ---@field callbacks table { on_update?, on_error?, on_stream_end?, on_lifecycle? }
@@ -202,6 +204,11 @@ function Session:_ingest_snapshot(s)
   self.model_override = nn(s.model_override) or self.model_override
   self.reasoning_effort = nn(s.reasoning_effort) or self.reasoning_effort
   self.model_options = nn(s.model_options) or self.model_options
+  -- The server reports the active model's context window (and per-model usage)
+  -- on the session object; the SSE session.usage event leaves context_window
+  -- null, so the snapshot is the authoritative source for the context-% UI.
+  self.context_window = nn(s.context_window) or self.context_window
+  self.usage_by_model = nn(s.usage_by_model) or self.usage_by_model
   self.title = nn(s.title) or self.title
 end
 

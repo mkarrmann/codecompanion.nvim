@@ -150,6 +150,26 @@ T["load ingests the snapshot and returns durable items"] = function()
   h.eq(s.session_id, result.session.id)
   -- session-create.json carries model_options and status.
   h.is_true(s.model_options ~= nil)
+  h.eq(s.context_window, 1000000)
+end
+
+T["create ingests context and per-model usage from the snapshot"] = function()
+  local cap = {
+    hosts = MAC,
+    create_resp = {
+      id = "conv_1",
+      status = "idle",
+      context_window = 200000,
+      usage_by_model = { codex = { input_tokens = 10 } },
+    },
+  }
+  local s = make({ agent = "claude-native-ui", host = "auto", workspace = "auto" }, "MacBook-Pro.local", cap)
+
+  local _, err = s:create()
+
+  h.eq(err, nil)
+  h.eq(s.context_window, 200000)
+  h.eq(s.usage_by_model.codex.input_tokens, 10)
 end
 
 T["load fails loudly when item fetch errors (no silent empty)"] = function()
