@@ -33,10 +33,23 @@ local log = require("codecompanion.utils.log")
 ---@field model_options? table
 ---@field title? string
 ---@field reducer CodeCompanion.Omnigent.Reducer
----@field callbacks table { on_update?, on_error?, on_stream_end? }
+---@field callbacks table { on_update?, on_error?, on_stream_end?, on_lifecycle? }
 ---@field _stream? table
 local Session = {}
 Session.__index = Session
+
+local lifecycle_kinds = {
+  turn_started = true,
+  elicitation = true,
+  elicitation_resolved = true,
+  turn_completed = true,
+  turn_failed = true,
+  turn_cancelled = true,
+  interrupted = true,
+  error = true,
+  status = true,
+  stream_error = true,
+}
 
 ---Lowercased leading DNS label.
 ---@param name string
@@ -319,6 +332,22 @@ function Session:_apply_state(u)
   end
 end
 
+---Deliver one state-folded update to the persistent lifecycle observer.
+---@param update CodeCompanion.Omnigent.Update
+function Session:_emit_lifecycle(update)
+  if not lifecycle_kinds[update.kind] then
+    return
+  end
+  local callback = self.callbacks.on_lifecycle
+  if not callback then
+    return
+  end
+  local ok, err = pcall(callback, update, self)
+  if not ok then
+    log:error("[Omnigent::Session] lifecycle callback failed: %s", tostring(err))
+  end
+end
+
 ---True if a foreground handler currently owns the stream (its callback is bound).
 ---@return boolean
 function Session:_foreground_active()
@@ -348,6 +377,7 @@ function Session:_on_event(ev)
   end
   for _, u in ipairs(updates) do
     self:_apply_state(u)
+    self:_emit_lifecycle(u)
     if self.callbacks.on_update then
       self.callbacks.on_update(u)
     elseif self.observer then
@@ -389,6 +419,13 @@ function Session:_on_stream_done(code)
   self._stream = nil
   self:_cancel_heartbeat()
   local was_foreground = self:_foreground_active()
+  if was_foreground and not self._stopping then
+    self:_emit_lifecycle({
+      kind = "stream_error",
+      response_id = self.reducer.current_response_id,
+      error = { message = "omnigent stream ended before the turn completed", code = code },
+    })
+  end
   if self.callbacks.on_stream_end then
     self.callbacks.on_stream_end(code)
   end

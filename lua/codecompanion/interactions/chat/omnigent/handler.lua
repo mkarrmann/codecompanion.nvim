@@ -63,6 +63,18 @@ function OmnigentHandler:ensure_session()
   session.callbacks.on_update = self._on_update
   session.callbacks.on_error = self._on_error
   session.callbacks.on_stream_end = self._on_stream_end
+  session.callbacks.on_lifecycle = function(update, current_session)
+    utils.fire("OmnigentLifecycle", {
+      bufnr = chat.bufnr,
+      session_id = current_session.session_id,
+      kind = update.kind,
+      response_id = update.response_id,
+      active_response_id = current_session.reducer.current_response_id,
+      status = current_session.status,
+      pending_elicitations = vim.tbl_count(current_session.pending_elicitations or {}),
+      error = update.error,
+    })
+  end
 
   if session.session_id then
     self:_ensure_observer()

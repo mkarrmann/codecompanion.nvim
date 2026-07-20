@@ -199,6 +199,32 @@ T["fires RequestStarted/Finished so the input queue advances"] = function()
   h.eq(finished[1].data.status, "success")
 end
 
+T["publishes normalized Omnigent lifecycle events with chat context"] = function()
+  local _, handler, cap = setup({})
+  local events = {}
+  local group = vim.api.nvim_create_augroup("omni_test_lifecycle", { clear = true })
+  vim.api.nvim_create_autocmd("User", {
+    group = group,
+    pattern = "CodeCompanionOmnigentLifecycle",
+    callback = function(args)
+      events[#events + 1] = args.data
+    end,
+  })
+
+  handler:submit({})
+  cap.drive.on_stdout(
+    'event: response.elicitation_request\n'
+      .. 'data: {"type":"response.elicitation_request","elicitation_id":"e1","method":"elicitation/create","params":{"message":"ok?"}}\n\n'
+  )
+  vim.api.nvim_del_augroup_by_id(group)
+
+  h.eq(#events, 1)
+  h.eq(events[1].bufnr, 0)
+  h.eq(events[1].session_id, "conv_1")
+  h.eq(events[1].kind, "elicitation")
+  h.eq(events[1].pending_elicitations, 1)
+end
+
 T["fires OmnigentToolCall with the item for a committed function_call"] = function()
   local chat, handler, cap = setup({})
   local seen = {}
@@ -252,6 +278,7 @@ T["detaches from the session on completion (no background leak)"] = function()
   cap.drive.on_stdout(read_raw("sse-clean-full.txt")) -- drives to turn_completed
   -- The finished handler must unbind so later stream events don't render through it.
   h.eq(chat.omnigent_session.callbacks.on_update, nil)
+  h.is_true(type(chat.omnigent_session.callbacks.on_lifecycle) == "function")
 
   local before = #chat.buf_calls
   -- A stray background delta after completion must NOT render.

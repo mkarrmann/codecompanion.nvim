@@ -233,6 +233,115 @@ T["start_stream pipes reducer updates to on_update"] = function()
   h.eq(s.status, "idle")
 end
 
+T["lifecycle observes folded state once before foreground delivery"] = function()
+  local order = {}
+  local observed
+  local cap = {
+    hosts = MAC,
+    cb = {
+      on_lifecycle = function(update, current_session)
+        order[#order + 1] = "lifecycle"
+        observed = {
+          kind = update.kind,
+          status = current_session.status,
+          pending = vim.tbl_count(current_session.pending_elicitations or {}),
+        }
+      end,
+      on_update = function()
+        order[#order + 1] = "foreground"
+      end,
+    },
+  }
+  local s = make({ agent = "claude-native-ui" }, "MacBook-Pro.local", cap)
+
+  s:_on_event({
+    type = "response.elicitation_request",
+    json = { elicitation_id = "e1", method = "elicitation/create", params = { message = "Approve?" } },
+  })
+
+  h.eq(order, { "lifecycle", "foreground" })
+  h.eq(observed.kind, "elicitation")
+  h.eq(observed.pending, 1)
+end
+
+T["lifecycle fires once when the background observer owns the update"] = function()
+  local lifecycle_count = 0
+  local observer_count = 0
+  local cap = {
+    hosts = MAC,
+    cb = {
+      on_lifecycle = function()
+        lifecycle_count = lifecycle_count + 1
+      end,
+    },
+  }
+  local s = make({ agent = "claude-native-ui" }, "MacBook-Pro.local", cap)
+  s:set_observer({
+    handle_update = function()
+      observer_count = observer_count + 1
+    end,
+  })
+
+  s:_on_event({ type = "response.created", json = { response = { id = "resp_bg" } } })
+
+  h.eq(lifecycle_count, 1)
+  h.eq(observer_count, 1)
+end
+
+T["lifecycle ignores content updates while foreground delivery continues"] = function()
+  local lifecycle_count = 0
+  local foreground_count = 0
+  local cap = {
+    hosts = MAC,
+    cb = {
+      on_lifecycle = function()
+        lifecycle_count = lifecycle_count + 1
+      end,
+      on_update = function()
+        foreground_count = foreground_count + 1
+      end,
+    },
+  }
+  local s = make({ agent = "claude-native-ui" }, "MacBook-Pro.local", cap)
+  s.reducer.current_response_id = "resp_1"
+
+  s:_on_event({
+    type = "response.output_text.delta",
+    json = { response_id = "resp_1", delta = "chunk" },
+  })
+
+  h.eq(lifecycle_count, 0)
+  h.eq(foreground_count, 1)
+end
+
+T["unexpected foreground stream end emits a terminal lifecycle update"] = function()
+  local updates = {}
+  local ended
+  local cap = {
+    hosts = MAC,
+    cb = {
+      on_update = function() end,
+      on_lifecycle = function(update)
+        updates[#updates + 1] = update
+      end,
+      on_stream_end = function(code)
+        ended = code
+      end,
+    },
+  }
+  local s = make({ agent = "claude-native-ui" }, "MacBook-Pro.local", cap)
+  s.reducer.current_response_id = "resp_live"
+  s._stream = {}
+
+  s:_on_stream_done(7)
+
+  h.eq(#updates, 1)
+  h.eq(updates[1].kind, "stream_error")
+  h.eq(updates[1].response_id, "resp_live")
+  h.eq(updates[1].error.code, 7)
+  h.eq(ended, 7)
+end
+
 T["post_message posts a well-formed message event"] = function()
   local cap = { hosts = MAC }
   local s = make({ agent = "claude-native-ui" }, "MacBook-Pro.local", cap)
