@@ -50,6 +50,28 @@ T["tool_call_line names the tool"] = function()
   h.is_true(render.tool_call_line({ tool_name = "shell" }):find("shell", 1, true) ~= nil)
 end
 
+T["tool_call_line includes useful arguments"] = function()
+  local shell = render.tool_call_line({ name = "shell", arguments = '{"cmd":"git status --short"}' })
+  h.is_true(shell:find("git status --short", 1, true) ~= nil)
+
+  local patch = render.tool_call_line({
+    name = "apply_patch",
+    arguments = "*** Begin Patch\n*** Update File: lua/example.lua\n*** End Patch",
+  })
+  h.is_true(patch:find("lua/example.lua", 1, true) ~= nil)
+end
+
+T["snapshot_messages pairs tool calls with committed output"] = function()
+  local messages = render.snapshot_messages({
+    { type = "function_call", name = "shell", arguments = '{"cmd":"pwd"}', call_id = "call_1" },
+    { type = "function_call_output", call_id = "call_1", output = "/tmp/project" },
+  })
+  h.eq(#messages, 1)
+  h.eq(messages[1].tool_call.call_id, "call_1")
+  h.eq(messages[1].tool_output, "/tmp/project")
+  h.is_true(messages[1].content:find("pwd", 1, true) ~= nil)
+end
+
 T["child_session_line shows title + status"] = function()
   local line = render.child_session_line({
     child_session_id = "conv_c",

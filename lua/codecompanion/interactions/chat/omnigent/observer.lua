@@ -189,6 +189,12 @@ function Observer:handle_update(u)
     self:_ensure_turn(u.response_id)
     self:_ensure_header()
     self.chat:add_buf_message({ role = C.LLM_ROLE, content = u.delta }, { type = MT.TOOL_MESSAGE })
+    utils.fire("OmnigentToolOutput", {
+      bufnr = self.chat.bufnr,
+      call_id = u.call_id,
+      delta = u.delta,
+      streaming = true,
+    })
   elseif k == "item_committed" then
     -- Externally-injected USER messages (driven from another client) should
     -- appear so the transcript stays coherent. Assistant text is already covered
@@ -210,10 +216,19 @@ function Observer:handle_update(u)
       end
     elseif u.item_type == "function_call" then
       local render = require("codecompanion.interactions.chat.omnigent.render")
-      self.chat:add_buf_message(
-        { role = C.LLM_ROLE, content = render.tool_call_line(u.item or { name = u.tool_name }) },
+      local item = u.item or { name = u.tool_name }
+      local line_number = self.chat:add_buf_message(
+        { role = C.LLM_ROLE, content = render.tool_call_line(item) },
         { type = MT.SYSTEM_MESSAGE or MT.LLM_MESSAGE }
       )
+      utils.fire("OmnigentToolCall", { bufnr = self.chat.bufnr, item = item, line_number = line_number })
+    elseif u.item_type == "function_call_output" then
+      local item = u.item or {}
+      utils.fire("OmnigentToolOutput", {
+        bufnr = self.chat.bufnr,
+        call_id = u.call_id or item.call_id,
+        output = item.output,
+      })
     elseif
       u.item_type == "message"
       and u.role == "assistant"
@@ -297,6 +312,14 @@ end
 ---@param item table
 function Observer:reconcile_item(item)
   local render = require("codecompanion.interactions.chat.omnigent.render")
+  if item.type == "function_call_output" then
+    utils.fire("OmnigentToolOutput", {
+      bufnr = self.chat.bufnr,
+      call_id = item.call_id,
+      output = item.output,
+    })
+    return
+  end
   local msg = render.durable_item_to_message(item)
   if not msg then
     return
@@ -307,7 +330,10 @@ function Observer:reconcile_item(item)
     { role = config.constants.LLM_ROLE, content = "\n> [!NOTE] Omnigent (recovered)\n" },
     { type = MT.SYSTEM_MESSAGE or MT.LLM_MESSAGE }
   )
-  self.chat:add_buf_message({ role = msg.role, content = msg.content }, { type = mtype })
+  local line_number = self.chat:add_buf_message({ role = msg.role, content = msg.content }, { type = mtype })
+  if msg.tool_call then
+    utils.fire("OmnigentToolCall", { bufnr = self.chat.bufnr, item = msg.tool_call, line_number = line_number })
+  end
   if self.chat.add_message then
     self.chat:add_message({ role = msg.role, content = msg.content }, { _meta = { sent = true } })
   end

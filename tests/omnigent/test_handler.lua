@@ -59,6 +59,7 @@ local function fake_chat(adapter, sess)
     current_request = nil,
     add_buf_message = function(self, msg, opts)
       table.insert(self.buf_calls, { content = msg.content, type = opts and opts.type })
+      return #self.buf_calls
     end,
     add_message = function(self, msg, opts)
       msg._meta = (opts and opts._meta) or msg._meta
@@ -271,7 +272,33 @@ T["fires OmnigentToolCall with the item for a committed function_call"] = functi
   h.eq(#seen, 1)
   h.eq(seen[1].bufnr, 0)
   h.eq(seen[1].item.name, "Edit")
+  h.is_true(type(seen[1].line_number) == "number")
   h.is_true(seen[1].item.arguments:find("/tmp/x.lua", 1, true) ~= nil)
+end
+
+T["fires OmnigentToolOutput for a committed function_call_output"] = function()
+  local _, handler, cap = setup({})
+  local seen = {}
+  local group = vim.api.nvim_create_augroup("omni_test_tooloutput", { clear = true })
+  vim.api.nvim_create_autocmd("User", {
+    group = group,
+    pattern = "CodeCompanionOmnigentToolOutput",
+    callback = function(a)
+      seen[#seen + 1] = a.data
+    end,
+  })
+
+  handler:submit({})
+  cap.drive.on_stdout(
+    "event: response.output_item.done\n"
+      .. 'data: {"type":"response.output_item.done","item":{"id":"fco_1","type":"function_call_output",'
+      .. '"call_id":"toolu_1","output":"command output"}}\n\n'
+  )
+  vim.api.nvim_del_augroup_by_id(group)
+
+  h.eq(#seen, 1)
+  h.eq(seen[1].call_id, "toolu_1")
+  h.eq(seen[1].output, "command output")
 end
 
 T["does NOT fire OmnigentToolCall for a committed message item"] = function()

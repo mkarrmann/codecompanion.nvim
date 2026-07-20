@@ -125,6 +125,49 @@ T["restores the input anchor after a standalone note (no turn boundary)"] = func
   h.is_true(chat.input_anchor_resets >= 1)
 end
 
+T["background tool calls expose arguments, line, and committed output"] = function()
+  local obs, chat = new_observer()
+  local calls, outputs = {}, {}
+  local group = vim.api.nvim_create_augroup("omni_observer_tool_events", { clear = true })
+  vim.api.nvim_create_autocmd("User", {
+    group = group,
+    pattern = "CodeCompanionOmnigentToolCall",
+    callback = function(args)
+      calls[#calls + 1] = args.data
+    end,
+  })
+  vim.api.nvim_create_autocmd("User", {
+    group = group,
+    pattern = "CodeCompanionOmnigentToolOutput",
+    callback = function(args)
+      outputs[#outputs + 1] = args.data
+    end,
+  })
+
+  obs:handle_update({
+    kind = "item_committed",
+    item_type = "function_call",
+    item = { name = "shell", arguments = '{"cmd":"git status"}', call_id = "call_1" },
+  })
+  obs:handle_update({
+    kind = "item_committed",
+    item_type = "function_call_output",
+    call_id = "call_1",
+    item = { call_id = "call_1", output = "clean" },
+  })
+  vim.api.nvim_del_augroup_by_id(group)
+
+  h.eq(#calls, 1)
+  h.eq(calls[1].item.call_id, "call_1")
+  h.is_true(type(calls[1].line_number) == "number")
+  h.is_true(vim.iter(chat.buf_calls):any(function(call)
+    return call.content and call.content:find("git status", 1, true) ~= nil
+  end))
+  h.eq(#outputs, 1)
+  h.eq(outputs[1].call_id, "call_1")
+  h.eq(outputs[1].output, "clean")
+end
+
 T["system-injected [System:...] user items render as a note, not a ## Me turn"] = function()
   local obs, chat = new_observer()
   obs:handle_update({

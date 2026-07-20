@@ -55,8 +55,7 @@ function M.durable_item_to_message(item)
     end
     return { role = role, content = text }
   elseif t == "function_call" then
-    local name = item.name or item.tool_name or (type(item.tool) == "table" and item.tool.name) or "tool"
-    return { role = C.LLM_ROLE, content = "**Tool call:** `" .. name .. "`", opts = { tool = true } }
+    return { role = C.LLM_ROLE, content = M.tool_call_line(item), opts = { tool = true }, tool_call = item }
   elseif t == "function_call_output" or t == "resource_event" then
     -- Tool output is folded under its call; resource events are terminal/setup
     -- noise. Neither becomes a standalone transcript message.
@@ -78,11 +77,94 @@ function M.tool_name(item)
     or "tool"
 end
 
----A compact one-line marker for a live tool call.
+local detail_keys = {
+  "cmd",
+  "command",
+  "file_path",
+  "path",
+  "query",
+  "pattern",
+  "url",
+  "prompt",
+  "task",
+}
+
+local function one_line(value)
+  return tostring(value or ""):gsub("\r?\n", " "):gsub("%s+", " "):match("^%s*(.-)%s*$")
+end
+
+local function shorten(value)
+  local limit = 600
+  if vim.fn.strchars(value) <= limit then
+    return value
+  end
+  return vim.fn.strcharpart(value, 0, limit - 1) .. "…"
+end
+
+local function decode_arguments(item)
+  local raw = item and item.arguments
+  if type(raw) == "table" then
+    return raw, nil
+  end
+  if type(raw) ~= "string" or raw == "" then
+    return nil, nil
+  end
+  local ok, decoded = pcall(vim.json.decode, raw)
+  if ok and type(decoded) == "table" then
+    return decoded, raw
+  end
+  return nil, raw
+end
+
+local function patch_paths(value)
+  if type(value) ~= "string" then
+    return nil
+  end
+  local paths = {}
+  for path in value:gmatch("%*%*%*%s+[%a ]+File:%s*([^\r\n]+)") do
+    paths[#paths + 1] = vim.trim(path)
+  end
+  return #paths > 0 and table.concat(paths, ", ") or nil
+end
+
+---Concise detail from a function-call item's arguments.
+---@param item table
+---@return string|nil
+function M.tool_detail(item)
+  local args, raw = decode_arguments(item)
+  local name = M.tool_name(item):lower()
+  if name:find("apply_patch", 1, true) or name == "patch" then
+    local patch = args and (args.patch or args.input) or raw
+    local paths = patch_paths(patch)
+    if paths then
+      return shorten(paths)
+    end
+  end
+  if args then
+    for _, key in ipairs(detail_keys) do
+      local value = args[key]
+      if type(value) == "string" and value ~= "" then
+        return shorten(one_line(value))
+      end
+    end
+    local keys = vim.tbl_keys(args)
+    table.sort(keys)
+    if #keys > 0 then
+      return "arguments: " .. table.concat(keys, ", ")
+    end
+  elseif raw then
+    return shorten(one_line(raw))
+  end
+  return nil
+end
+
+---A compact, informative one-line marker for a live tool call.
 ---@param item table
 ---@return string
 function M.tool_call_line(item)
-  return "\n> ⚙ **tool** `" .. M.tool_name(item) .. "`\n"
+  local detail = M.tool_detail(item)
+  local suffix = detail and (" — `" .. detail:gsub("`", "'") .. "`") or ""
+  return "\n> ⚙ **tool** `" .. M.tool_name(item) .. "`" .. suffix .. "\n"
 end
 
 ---A compact one-line marker for a child (sub-agent) session update.
@@ -146,10 +228,18 @@ end
 ---@return table[]
 function M.snapshot_messages(items)
   local out = {}
+  local calls = {}
   for _, item in ipairs(items or {}) do
     local msg = M.durable_item_to_message(item)
     if msg then
+      if item.type == "function_call" then
+        if item.call_id then
+          calls[item.call_id] = msg
+        end
+      end
       out[#out + 1] = msg
+    elseif item.type == "function_call_output" and item.call_id and calls[item.call_id] then
+      calls[item.call_id].tool_output = item.output
     end
   end
   return out

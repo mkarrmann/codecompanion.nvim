@@ -72,6 +72,7 @@ function M.mock_chat(adapter)
     input_anchor_resets = 0,
     add_buf_message = function(self, msg, opts)
       table.insert(self.buf_calls, { role = msg.role, content = msg.content, type = opts and opts.type })
+      return #self.buf_calls
     end,
     add_message = function(self, msg, opts)
       msg._meta = (opts and opts._meta) or msg._meta

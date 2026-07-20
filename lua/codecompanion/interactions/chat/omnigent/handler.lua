@@ -148,7 +148,21 @@ function OmnigentHandler:_hydrate(items)
       -- Render with the role-appropriate buffer type so user turns aren't drawn
       -- as LLM output.
       local mtype = (m.role == config.constants.USER_ROLE) and MT.USER_MESSAGE or MT.LLM_MESSAGE
-      self.chat:add_buf_message({ role = m.role, content = m.content }, { type = mtype })
+      local line_number = self.chat:add_buf_message({ role = m.role, content = m.content }, { type = mtype })
+      if m.tool_call then
+        utils.fire("OmnigentToolCall", {
+          bufnr = self.chat.bufnr,
+          item = m.tool_call,
+          line_number = line_number,
+        })
+        if m.tool_output then
+          utils.fire("OmnigentToolOutput", {
+            bufnr = self.chat.bufnr,
+            call_id = m.tool_call.call_id,
+            output = m.tool_output,
+          })
+        end
+      end
     end
   end
   return #msgs
@@ -283,6 +297,12 @@ function OmnigentHandler:on_update(u)
     end
   elseif k == "tool_output_delta" then
     self.chat:add_buf_message({ role = C.LLM_ROLE, content = u.delta }, { type = MT.TOOL_MESSAGE })
+    utils.fire("OmnigentToolOutput", {
+      bufnr = self.chat.bufnr,
+      call_id = u.call_id,
+      delta = u.delta,
+      streaming = true,
+    })
   elseif k == "elicitation" then
     -- The turn is blocked server-side until this resolves; present it and resolve
     -- via the session. We are the approval authority (never auto-approve).
@@ -345,11 +365,19 @@ function OmnigentHandler:_render_item(u)
     -- Surface the committed tool call for external consumers (diff tracking, task
     -- attribution): `item.arguments` (a JSON string of the tool params) is the
     -- only place a server-side tool's file paths appear.
-    utils.fire("OmnigentToolCall", { bufnr = self.chat.bufnr, item = u.item or { name = u.tool_name } })
-    self.chat:add_buf_message(
+    local item = u.item or { name = u.tool_name }
+    local line_number = self.chat:add_buf_message(
       { role = config.constants.LLM_ROLE, content = render.tool_call_line(u.item or { name = u.tool_name }) },
       { type = MT.SYSTEM_MESSAGE or MT.LLM_MESSAGE }
     )
+    utils.fire("OmnigentToolCall", { bufnr = self.chat.bufnr, item = item, line_number = line_number })
+  elseif u.item_type == "function_call_output" then
+    local item = u.item or {}
+    utils.fire("OmnigentToolOutput", {
+      bufnr = self.chat.bufnr,
+      call_id = u.call_id or item.call_id,
+      output = item.output,
+    })
   elseif
     u.item_type == "message"
     and u.role == "assistant"
