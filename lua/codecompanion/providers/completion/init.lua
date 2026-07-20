@@ -88,13 +88,15 @@ api.nvim_create_autocmd("User", {
 
 ---Return the slash commands to be used for completion
 ---@param interaction? string The interaction type to filter by (defaults to current buffer)
+---@param context? { bufnr?: number, chat?: CodeCompanion.Chat, adapter?: table }
 ---@return table
-function M.slash_commands(interaction)
+function M.slash_commands(interaction, context)
   interaction = interaction or M.interaction_type()
+  context = context or {}
 
-  local bufnr = api.nvim_get_current_buf()
-  local adapter_info = adapter_cache[bufnr]
-  local chat = require("codecompanion.interactions.chat").buf_get_chat(bufnr)
+  local bufnr = context.bufnr or api.nvim_get_current_buf()
+  local chat = context.chat or require("codecompanion.interactions.chat").buf_get_chat(bufnr)
+  local adapter_info = context.adapter or adapter_cache[bufnr] or (chat and chat.adapter)
 
   local filtered_slash_commands = slash_command_filter.filter_enabled_slash_commands(
     config.interactions.chat.slash_commands,
@@ -144,7 +146,7 @@ function M.slash_commands(interaction)
         -- Check if this prompt library slash command should be enabled
         if v.enabled ~= nil then
           if type(v.enabled) == "function" then
-            local ok, result = pcall(v.enabled, { adapter = adapter_info })
+            local ok, result = pcall(v.enabled, { adapter = adapter_info, chat = chat })
             return ok and result
           elseif type(v.enabled) == "boolean" then
             return v.enabled

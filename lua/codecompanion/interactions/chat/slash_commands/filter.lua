@@ -2,6 +2,7 @@ local filter = require("codecompanion.interactions.chat.helpers.filter")
 
 ---@class CodeCompanion.SlashCommands.Filter
 local Filter = filter.create_filter({
+  cache = false,
   skip_keys = { "opts" },
 })
 

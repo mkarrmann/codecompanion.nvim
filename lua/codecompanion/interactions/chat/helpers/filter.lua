@@ -82,13 +82,11 @@ function Filter.create_filter(config)
     }
     local current_cache_key = hash.hash(cache_key_data)
 
-    if is_cache_valid(current_cache_key) and next(_cache) then
+    if config.cache ~= false and is_cache_valid(current_cache_key) and next(_cache) then
       return _cache
     end
 
-    _cache = {}
-    _cache_timestamp = vim.loop.now()
-    _config_hash = current_cache_key
+    local enabled_items = {}
 
     -- Get skip keys from config or use defaults
     local skip_keys = config.skip_keys or { "opts" }
@@ -105,11 +103,17 @@ function Filter.create_filter(config)
 
       if not should_skip then
         local is_enabled = evaluate_enabled(item_config, opts)
-        _cache[item_name] = is_enabled
+        enabled_items[item_name] = is_enabled
       end
     end
 
-    return _cache
+    if config.cache ~= false then
+      _cache = enabled_items
+      _cache_timestamp = vim.loop.now()
+      _config_hash = current_cache_key
+    end
+
+    return enabled_items
   end
 
   ---Filter configuration to only include enabled items

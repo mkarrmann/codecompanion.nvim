@@ -69,6 +69,27 @@ T["respects adapter context in enabled function"] = function()
   h.eq(filtered_openai.adapter_specific_cmd, nil)
 end
 
+T["reevaluates dynamic chat context"] = function()
+  local slash_commands_config = {
+    chat_specific_cmd = {
+      description = "test",
+      enabled = function(opts)
+        return opts.chat and opts.chat.command_enabled or false
+      end,
+    },
+  }
+  local chat = { command_enabled = false }
+
+  local filtered_before =
+    slash_command_filter.filter_enabled_slash_commands(slash_commands_config, { chat = chat })
+  chat.command_enabled = true
+  local filtered_after =
+    slash_command_filter.filter_enabled_slash_commands(slash_commands_config, { chat = chat })
+
+  h.eq(filtered_before.chat_specific_cmd, nil)
+  h.eq(filtered_after.chat_specific_cmd ~= nil, true)
+end
+
 T["cache invalidation"] = new_set()
 
 T["cache invalidation"]["detects config changes when commands are added"] = function()

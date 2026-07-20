@@ -191,4 +191,62 @@ T["adapter cache"]["updates when switching from HTTP to ACP adapter"] = function
   h.eq(child.lua_get("_G.acp_result"), true)
 end
 
+T["slash commands"] = new_set()
+
+T["slash commands"]["accept explicit chat context from a detached input buffer"] = function()
+  child.lua([[
+    local h = require("tests.helpers")
+    h.setup_plugin()
+
+    local config = require("codecompanion.config")
+    config.interactions.chat.slash_commands.detached_only = {
+      description = "Detached input command",
+      enabled = function(opts)
+        return opts.chat and opts.chat.detached_commands == true
+      end,
+    }
+
+    local input_bufnr = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_set_current_buf(input_bufnr)
+    local chat = {
+      adapter = { name = "test_adapter", type = "http" },
+      detached_commands = true,
+    }
+    local completion = require("codecompanion.providers.completion")
+
+    local implicit = completion.slash_commands("chat")
+    local explicit = completion.slash_commands("chat", {
+      bufnr = input_bufnr,
+      chat = chat,
+      adapter = chat.adapter,
+    })
+    local goal_chat = {
+      adapter = {
+        name = "omnigent",
+        type = "omnigent",
+        defaults = { agent = "codex-native-ui" },
+      },
+    }
+    local goal_items = completion.slash_commands("chat", {
+      bufnr = input_bufnr,
+      chat = goal_chat,
+      adapter = goal_chat.adapter,
+    })
+    local function contains(items, label)
+      return vim.iter(items):any(function(item)
+        return item.label == label
+      end)
+    end
+
+    _G.implicit_result = contains(implicit, "/detached_only")
+    _G.explicit_result = contains(explicit, "/detached_only")
+    _G.goal_result = contains(goal_items, "/goal")
+    vim.api.nvim_buf_delete(input_bufnr, { force = true })
+  ]])
+
+  h.eq(child.lua_get("_G.implicit_result"), false)
+  h.eq(child.lua_get("_G.explicit_result"), true)
+  h.eq(child.lua_get("_G.goal_result"), true)
+end
+
 return T
