@@ -261,7 +261,7 @@ function Observer:handle_update(u)
   elseif k == "turn_completed" then
     self:_fire_usage(u.usage)
     self:_finalize()
-  elseif k == "turn_failed" or k == "error" then
+  elseif k == "turn_failed" or k == "error" or (k == "status" and u.status == "failed") then
     local msg = type(u.error) == "table" and (u.error.message or vim.inspect(u.error)) or tostring(u.error)
     self.chat:add_buf_message(
       { role = C.LLM_ROLE, content = string.format("\n> [!WARNING] Omnigent background turn failed: %s\n", msg) },
@@ -290,6 +290,7 @@ function Observer:handle_update(u)
     or k == "error"
     or k == "interrupted"
     or k == "turn_cancelled"
+    or (k == "status" and u.status == "failed")
   if writes_buffer or ends_turn then
     self:_restore_input()
   end

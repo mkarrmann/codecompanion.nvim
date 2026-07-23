@@ -332,6 +332,11 @@ function OmnigentHandler:on_update(u)
     self:_complete("error")
   elseif k == "interrupted" or k == "turn_cancelled" then
     self:_complete("cancelled")
+  elseif k == "status" and u.status == "failed" then
+    -- A session-level failure (e.g. runner_disconnected) arrives as a status
+    -- update, not turn_failed. Surface it instead of leaving the turn silent.
+    self:_render_error(u.error or "omnigent session failed")
+    self:_complete("error")
   elseif k == "status" or k == "usage" or k == "model" then
     if k == "usage" then
       self:_fire_usage(u.usage)
