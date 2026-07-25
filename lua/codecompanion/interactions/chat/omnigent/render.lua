@@ -204,6 +204,18 @@ end
 ---@return table
 function M.enrich_usage(usage, session)
   usage = type(usage) == "table" and vim.deepcopy(usage) or {}
+  -- Explicit, offline, per-model context windows (adapter `opts.context_windows`,
+  -- keyed by vendor model id) win over the server-reported window: the omnigent
+  -- server falls back to a conservative catalog default when it can't reach the
+  -- model catalog (e.g. a devserver with no direct internet), which mislabels the
+  -- context meter. A locally-configured window for the active model is trusted.
+  if session then
+    local cur = session.model_override or session.model
+    local configured = session.adapter and session.adapter.opts and session.adapter.opts.context_windows
+    if cur and type(configured) == "table" and configured[cur] then
+      usage.context_window = configured[cur]
+    end
+  end
   if not usage.context_window and session then
     usage.context_window = session.context_window
   end
