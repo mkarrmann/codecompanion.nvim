@@ -317,6 +317,7 @@ function Builder:_write_to_buffer(lines, opts)
     -- Header text sits 2 lines below `insert_line` (two blank spacers + header)
     self.state.current_header_line = insert_line + 2
     self.chat.ui:render_headers()
+    self.chat.ui:render_timestamps()
   end
 
   -- Tool folds

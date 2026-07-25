@@ -1228,6 +1228,8 @@ The user is working on a %s machine. Please respond with system specific command
       show_reasoning = true, -- Show reasoning content in the chat buffer?
 
       show_settings = false, -- Show an LLM's settings at the top of the chat buffer?
+      show_timestamps = false, -- Show a per-message timestamp on each role header (virtual text; never edits the buffer)?
+      timestamp_format = "%H:%M:%S", -- os.date() format for the header timestamp when show_timestamps is true
       show_token_count = true, -- Show the token count for each response?
       show_tools_processing = true, -- Show the loading message when tools are being executed?
       start_in_insert_mode = false, -- Open the chat buffer in insert mode?

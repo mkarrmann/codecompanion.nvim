@@ -17,6 +17,7 @@ local CONSTANTS = {
   NS_HEADER = api.nvim_create_namespace("CodeCompanion-headers"),
   NS_TOKENS = api.nvim_create_namespace("CodeCompanion-tokens"),
   NS_VIRTUAL_TEXT = api.nvim_create_namespace("CodeCompanion-virtual_text"),
+  NS_TIMESTAMP = api.nvim_create_namespace("CodeCompanion-timestamps"),
 
   AUTOCMD_GROUP = "codecompanion.chat.ui",
 }
@@ -416,6 +417,7 @@ function UI:render(context, messages, opts)
   self:unlock_buf()
   api.nvim_buf_set_lines(self.chat_bufnr, 0, -1, false, lines)
   self:render_headers()
+  self:render_timestamps()
 
   self:follow()
 
@@ -451,6 +453,45 @@ function UI:render_headers()
     end
   end
   log:trace("Rendering headers in the chat buffer")
+end
+
+---Render a per-message timestamp as right-aligned virtual text on each role
+---header line. Deliberately independent of `show_header_separator` (unlike
+---:render_headers, which no-ops when separators are off), and uses its own
+---namespace. Timestamps are sticky: a header is stamped once, the first time it
+---is seen (i.e. when the message is created), and the extmark then tracks that
+---line across later edits, so the header keeps its original time. Pure virtual
+---text — the buffer contents are never modified, so markdown / Tree-sitter
+---header detection and `parser.messages` extraction are unaffected.
+---@return nil
+function UI:render_timestamps()
+  if not config.display.chat.show_timestamps then
+    return
+  end
+  local fmt = config.display.chat.timestamp_format or "%H:%M:%S"
+  local llm_role = set_llm_role(self.roles.llm, self.adapter)
+  local lines = api.nvim_buf_get_lines(self.chat_bufnr, 0, -1, false)
+  for line, content in ipairs(lines) do
+    if content:match("^## " .. vim.pesc(self.roles.user)) or content:match("^## " .. vim.pesc(llm_role)) then
+      local row = line - 1
+      -- Sticky: skip a header that already carries a timestamp extmark, so the
+      -- shown time is the message's creation time, not the current render pass.
+      local existing = api.nvim_buf_get_extmarks(
+        self.chat_bufnr,
+        CONSTANTS.NS_TIMESTAMP,
+        { row, 0 },
+        { row, -1 },
+        { limit = 1 }
+      )
+      if #existing == 0 then
+        api.nvim_buf_set_extmark(self.chat_bufnr, CONSTANTS.NS_TIMESTAMP, row, 0, {
+          virt_text = { { os.date(fmt), "CodeCompanionChatTimestamp" } },
+          virt_text_pos = "right_align",
+          priority = 110,
+        })
+      end
+    end
+  end
 end
 
 ---Set the welcome message in the chat buffer

@@ -16,6 +16,7 @@ api.nvim_set_hl(0, "CodeCompanionChatInfo", { link = "DiagnosticInfo", default =
 api.nvim_set_hl(0, "CodeCompanionChatSeparator", { link = "@punctuation.special.markdown", default = true })
 api.nvim_set_hl(0, "CodeCompanionChatSubtext", { link = "Comment", default = true })
 api.nvim_set_hl(0, "CodeCompanionChatTokens", { link = "Comment", default = true })
+api.nvim_set_hl(0, "CodeCompanionChatTimestamp", { link = "Comment", default = true })
 api.nvim_set_hl(0, "CodeCompanionChatTool", { link = "Special", default = true })
 api.nvim_set_hl(0, "CodeCompanionChatToolFailure", { link = "DiagnosticError", default = true })
 api.nvim_set_hl(0, "CodeCompanionChatToolFailureIcon", { link = "Error", default = true })
