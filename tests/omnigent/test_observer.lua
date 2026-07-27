@@ -32,7 +32,7 @@ end
 T["finalize commits the turn to the transcript and clears partial"] = function()
   local obs, chat = new_observer()
   obs:handle_update({ kind = "message_delta", response_id = "__live__", delta = "done.", text = "done." })
-  obs:handle_update({ kind = "turn_completed", response_id = "resp_real", native = true })
+  obs:handle_update({ kind = "turn_completed", response_id = "resp_real" })
 
   h.eq(obs:has_partial(), false)
   local committed = vim.tbl_filter(function(m)
@@ -89,7 +89,7 @@ T["committed-only native assistant messages render and persist"] = function()
     item_id = "msg_a",
   })
   h.eq(fs.rendered_text(chat, "llm_msg"), "claude answer")
-  obs:handle_update({ kind = "turn_completed", response_id = "resp_claude", native = true })
+  obs:handle_update({ kind = "turn_completed", response_id = "resp_claude" })
   local assistant = vim.tbl_filter(function(message)
     return message.content == "claude answer"
   end, chat.messages)
@@ -114,7 +114,7 @@ T["restores the input anchor after a background turn completes"] = function()
   local obs, chat = new_observer()
   obs:handle_update({ kind = "message_delta", response_id = "__live__", delta = "hi", text = "hi" })
   h.eq(chat.input_anchor_resets, 0) -- not while mid-stream
-  obs:handle_update({ kind = "turn_completed", response_id = "resp_x", native = true })
+  obs:handle_update({ kind = "turn_completed", response_id = "resp_x" })
   h.is_true(chat.input_anchor_resets >= 1) -- restored on completion
 end
 
@@ -230,41 +230,11 @@ T["fires ChatOmnigentWakeup and ChatOmnigentBackgroundTurn"] = function()
     end,
   })
   obs:handle_update({ kind = "message_delta", response_id = "__live__", delta = "hi", text = "hi" })
-  obs:handle_update({ kind = "turn_completed", response_id = "resp_x", native = true })
+  obs:handle_update({ kind = "turn_completed", response_id = "resp_x" })
   vim.api.nvim_del_augroup_by_id(group)
 
   h.eq(seen["CodeCompanionChatOmnigentWakeup"], 1)
   h.eq(seen["CodeCompanionChatOmnigentBackgroundTurn"], 1)
-end
-
-T["coalesces a multi-round-trip turn into one block until session-idle"] = function()
-  -- A single logical turn can emit several response.completed round-trips before
-  -- the session goes idle. Only the idle (native) completion ends the block; the
-  -- intra-turn completions must not split it into separate headers/finalizes.
-  local obs, chat = new_observer()
-  obs:handle_update({ kind = "turn_started", response_id = "r1", background = true })
-  obs:handle_update({ kind = "message_delta", response_id = "r1", delta = "Point one.", text = "Point one." })
-  obs:handle_update({ kind = "turn_completed", response_id = "r1" }) -- intra-turn, no native
-  obs:handle_update({ kind = "message_delta", response_id = "r2", delta = "Two.", text = "Two." })
-  obs:handle_update({ kind = "turn_completed", response_id = "r2", native = true }) -- session idle
-
-  local headers = vim.tbl_filter(function(b)
-    return b.type == "sys_msg" and b.content:find("background activity", 1, true) ~= nil
-  end, chat.buf_calls)
-  h.eq(#headers, 1)
-  local rendered = fs.rendered_text(chat, "llm_msg")
-  h.is_true(rendered:find("Point one.", 1, true) ~= nil)
-  h.is_true(rendered:find("Two.", 1, true) ~= nil)
-  -- Finalized exactly once, with both segments, only after the idle completion.
-  local committed = vim.tbl_filter(function(m)
-    return m.role == "llm"
-  end, chat.messages)
-  h.eq(#committed, 1)
-  h.is_true(committed[1].content:find("Point one.", 1, true) ~= nil)
-  h.is_true(committed[1].content:find("Two.", 1, true) ~= nil)
-  -- Input anchor restored once (at idle), not between intra-turn segments.
-  h.eq(chat.input_anchor_resets, 1)
-  h.eq(obs:has_partial(), false)
 end
 
 T["a reconcile batch writes one recovered header, not one per item"] = function()
