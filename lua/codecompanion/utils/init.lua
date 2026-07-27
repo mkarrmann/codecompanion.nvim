@@ -205,13 +205,18 @@ function M.timestamp_from_iso(iso)
     year = tonumber(year), --[[@as number]]
   }
 
-  -- The timestamp is UTC, but os.time() reads the table as local time, so add
-  -- the local offset from UTC to recover the true instant
-  local now = os.time()
-  local utc = os.date("!*t", now) --[[@as osdateparam]]
-  local utc_offset = os.difftime(now, os.time(utc))
+  -- The timestamp is UTC, but os.time() reads the table as local time. Add the
+  -- local offset from UTC to recover the true instant, computing that offset at
+  -- the TARGET instant (not `now`) so it stays correct when the target and today
+  -- fall on opposite sides of a daylight-saving transition. os.date returns
+  -- isdst=false for UTC; clear it so os.time re-infers DST for the target date
+  -- instead of forcing standard time (which would skew the offset by an hour).
+  local t = os.time(date)
+  local utc = os.date("!*t", t) --[[@as osdateparam]]
+  utc.isdst = nil
+  local utc_offset = os.difftime(t, os.time(utc))
 
-  return os.time(date) + utc_offset
+  return t + utc_offset
 end
 
 ---Make a timestamp relative
