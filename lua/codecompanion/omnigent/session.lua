@@ -562,6 +562,9 @@ function Session:_reconcile()
   if not items then
     return
   end
+  if self.observer.reconcile_begin then
+    self.observer:reconcile_begin()
+  end
   for _, item in ipairs(items) do
     local id = item.id
     if id and not self.seen_items[id] then
@@ -580,6 +583,11 @@ function Session:_reconcile()
         end)
       end
     end
+  end
+  if self.observer.reconcile_end then
+    pcall(function()
+      self.observer:reconcile_end()
+    end)
   end
 end
 

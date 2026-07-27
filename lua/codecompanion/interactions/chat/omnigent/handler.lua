@@ -326,7 +326,14 @@ function OmnigentHandler:on_update(u)
     )
   elseif k == "turn_completed" then
     self:_fire_usage(u.usage) -- response.completed.usage carries context_tokens
-    self:_complete("success")
+    -- A plain response.completed (no `native`) is one model round-trip within a
+    -- still-running turn; stay bound so the rest of the answer keeps rendering in
+    -- this foreground block instead of detaching to the background observer. Only
+    -- a session-idle turn_completed (`native`) ends the logical turn. A wedged
+    -- turn that never idles is still terminated by _on_stream_end / interrupt.
+    if u.native then
+      self:_complete("success")
+    end
   elseif k == "turn_failed" or k == "error" then
     self:_render_error(u.error or "omnigent turn failed")
     self:_complete("error")

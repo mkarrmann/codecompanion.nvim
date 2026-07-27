@@ -49,7 +49,10 @@ end
 ---@param rid? string
 function Observer:_ensure_turn(rid)
   if not self._cur then
-    self._cur = { rid = rid, shown = "", header = false }
+    -- `shown` is the dedup cursor for the CURRENT round-trip segment (reset per
+    -- segment); `acc` is the whole block's text (spanning coalesced segments) so
+    -- _finalize persists the complete answer, not just the last segment.
+    self._cur = { rid = rid, shown = "", acc = "", header = false }
   elseif rid then
     -- Continuation (e.g. reconnect replay retargets the response id): keep the
     -- text we've already shown; only update the id we're tracking.
@@ -100,6 +103,27 @@ function Observer:_render_text(full)
     { type = self.chat.MESSAGE_TYPES.LLM_MESSAGE }
   )
   cur.shown = full
+  cur.acc = cur.acc .. suffix
+end
+
+---Close one intra-turn round-trip segment WITHOUT ending the block. The next
+---segment appends to the same background block (no new header, no interstitial
+---`## Me`); only a session-idle turn end calls _finalize. Resetting `shown` lets
+---the next message's text render from scratch even though it is shorter than the
+---prior segment's accumulated text.
+function Observer:_end_segment()
+  local cur = self._cur
+  if not cur then
+    return
+  end
+  cur.shown = ""
+  if cur.acc ~= "" and not cur.acc:match("\n$") then
+    self.chat:add_buf_message(
+      { role = config.constants.LLM_ROLE, content = "\n" },
+      { type = self.chat.MESSAGE_TYPES.LLM_MESSAGE }
+    )
+    cur.acc = cur.acc .. "\n"
+  end
 end
 
 ---Commit the finished background turn to the transcript (so it persists and is
@@ -110,9 +134,9 @@ function Observer:_finalize()
   if not cur then
     return
   end
-  if cur.shown ~= "" and self.chat.add_message then
+  if cur.acc ~= "" and self.chat.add_message then
     self.chat:add_message(
-      { role = config.constants.LLM_ROLE, content = cur.shown },
+      { role = config.constants.LLM_ROLE, content = cur.acc },
       { _meta = { sent = true, omnigent_background = true } }
     )
   end
@@ -121,7 +145,7 @@ function Observer:_finalize()
     id = self.chat.id,
     session_id = self.chat.omnigent_session_id,
     response_id = cur.rid,
-    content = cur.shown,
+    content = cur.acc,
   })
 end
 
@@ -260,7 +284,14 @@ function Observer:handle_update(u)
     )
   elseif k == "turn_completed" then
     self:_fire_usage(u.usage)
-    self:_finalize()
+    -- Only a session-idle turn_completed (`native`) ends the logical turn. A
+    -- plain response.completed is one intra-turn round-trip: keep the block open
+    -- so the next segment appends here instead of opening a new block.
+    if u.native then
+      self:_finalize()
+    else
+      self:_end_segment()
+    end
   elseif k == "turn_failed" or k == "error" or (k == "status" and u.status == "failed") then
     local msg = type(u.error) == "table" and (u.error.message or vim.inspect(u.error)) or tostring(u.error)
     self.chat:add_buf_message(
@@ -285,7 +316,7 @@ function Observer:handle_update(u)
   -- Restore the user input anchor after any buffer-writing OR turn-ending update,
   -- unless a turn is still mid-stream (restored once it completes). This is what
   -- keeps the user's next submit parseable after out-of-band background rendering.
-  local ends_turn = k == "turn_completed"
+  local ends_turn = (k == "turn_completed" and u.native)
     or k == "turn_failed"
     or k == "error"
     or k == "interrupted"
@@ -308,6 +339,19 @@ function Observer:_fire_usage(usage)
   })
 end
 
+---Begin a reconnect-reconcile batch so the "recovered" header is written once for
+---the whole batch rather than once per missed item.
+function Observer:reconcile_begin()
+  self._recovered_pending = true
+end
+
+---End a reconnect-reconcile batch and restore the user input anchor once (a batch
+---may have written buffer content out-of-band).
+function Observer:reconcile_end()
+  self._recovered_pending = nil
+  self:_restore_input()
+end
+
 ---Render a durable item fetched during reconnect reconcile (see Session:_reconcile).
 ---Only message items are rendered; already-seen items are filtered by the caller.
 ---@param item table
@@ -327,10 +371,16 @@ function Observer:reconcile_item(item)
   end
   local MT = self.chat.MESSAGE_TYPES
   local mtype = (msg.role == config.constants.USER_ROLE) and MT.USER_MESSAGE or MT.LLM_MESSAGE
-  self.chat:add_buf_message(
-    { role = config.constants.LLM_ROLE, content = "\n> [!NOTE] Omnigent (recovered)\n" },
-    { type = MT.SYSTEM_MESSAGE or MT.LLM_MESSAGE }
-  )
+  -- One "recovered" header per reconcile batch (see reconcile_begin); assistant
+  -- items then coalesce under it. A real user item still flips to a `## Me` block
+  -- via its role, which is correct.
+  if self._recovered_pending then
+    self._recovered_pending = false
+    self.chat:add_buf_message(
+      { role = config.constants.LLM_ROLE, content = "\n> [!NOTE] Omnigent (recovered)\n" },
+      { type = MT.SYSTEM_MESSAGE or MT.LLM_MESSAGE }
+    )
+  end
   local line_number = self.chat:add_buf_message({ role = msg.role, content = msg.content }, { type = mtype })
   if msg.tool_call then
     utils.fire("OmnigentToolCall", { bufnr = self.chat.bufnr, item = msg.tool_call, line_number = line_number })
