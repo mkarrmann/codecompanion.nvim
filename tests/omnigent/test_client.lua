@@ -249,6 +249,59 @@ T["asynchronous REST failures use normalised errors"] = function()
   h.eq(got.retryable, true)
 end
 
+-- ---- Fork + runner launch -------------------------------------------------
+
+T["fork_session posts to the fork endpoint with the body"] = function()
+  local captured
+  local c = client.new({
+    request = function(o)
+      captured = o
+      return { status = 200, body = vim.json.encode({ id = "conv_2", status = "idle" }) }
+    end,
+  })
+  local s = c:fork_session("conv_1", { title = "branch", up_to_response_id = "resp_9" })
+  h.eq(s.id, "conv_2")
+  h.eq(captured.method, "post")
+  h.is_true(captured.url:find("/v1/sessions/conv_1/fork", 1, true) ~= nil)
+  local sent = vim.json.decode(captured.body)
+  h.eq(sent.title, "branch")
+  h.eq(sent.up_to_response_id, "resp_9")
+end
+
+T["fork_session sends an empty object when no body is given"] = function()
+  local captured
+  local c = client.new({
+    request = function(o)
+      captured = o
+      return { status = 200, body = vim.json.encode({ id = "conv_2", status = "idle" }) }
+    end,
+  })
+  c:fork_session("conv_1")
+  h.eq(captured.body, "{}")
+end
+
+T["launch_runner posts to the host runners endpoint"] = function()
+  local captured
+  local c = client.new({
+    request = function(o)
+      captured = o
+      return { status = 200, body = vim.json.encode({ runner_id = "run_1", status = "starting" }) }
+    end,
+  })
+  local res = c:launch_runner("host_mac", {
+    session_id = "conv_2",
+    workspace = "/repo",
+    git = { branch_name = "cc-fork-1", base_branch = nil },
+  })
+  h.eq(res.runner_id, "run_1")
+  h.eq(captured.method, "post")
+  h.is_true(captured.url:find("/v1/hosts/host_mac/runners", 1, true) ~= nil)
+  local sent = vim.json.decode(captured.body)
+  h.eq(sent.session_id, "conv_2")
+  h.eq(sent.workspace, "/repo")
+  h.eq(sent.git.branch_name, "cc-fork-1")
+end
+
 -- ---- Agent resolution (no prefix sniffing) --------------------------------
 
 T["resolve_agent: id match wins, then unique name"] = function()

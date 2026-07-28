@@ -358,6 +358,66 @@ function Session:create(opts)
   return s
 end
 
+---Fork a source session into a new, independently-runnable session.
+---
+---Two server calls, mirroring the Web UI: (1) `POST /fork` deep-copies the
+---source's items into a new UNBOUND session; (2) `POST /hosts/{id}/runners`
+---binds + launches a runner for it. With `branch_name`, the launch creates a git
+---worktree off the source's workspace so the fork runs isolated from the source
+----- and, for a native harness, carries the source's transcript, which the host
+---clones at boot (hence the fork MUST launch on the source's host).
+---
+---Static: does NOT mutate a Session instance. Returns the fork snapshot for a
+---fresh chat to `:load` / `Chat:resume_omnigent`.
+---@param client CodeCompanion.Omnigent.Client
+---@param source table { session_id, host_id?, workspace? }
+---@param opts? table { title?, up_to_response_id?, branch_name?, base_branch? }
+---@return table|nil fork  Session snapshot (has `.id`), or nil on error.
+---@return table|nil err  On a launch failure, carries `fork_session_id` (the
+---  created-but-unbound fork) so the caller can offer a manual runner retry.
+function Session.fork(client, source, opts)
+  opts = opts or {}
+  if not (source and source.session_id) then
+    return nil, { message = "fork requires a source session id", code = "session_required" }
+  end
+
+  local fork, err = client:fork_session(source.session_id, {
+    title = opts.title,
+    up_to_response_id = opts.up_to_response_id,
+  })
+  if not fork or not fork.id then
+    return nil, err or { message = "fork returned no session", code = "fork_failed" }
+  end
+
+  -- A host-launched source needs its fork bound to a runner before it can post;
+  -- a headless (host_id=nil) source runs server-local and needs no launch.
+  if source.host_id then
+    if not source.workspace then
+      return nil, {
+        message = "source session has a host but no workspace; cannot launch the fork's runner",
+        code = "workspace_required",
+      }
+    end
+    -- base_branch=nil tells the server to branch from the source repo's current
+    -- HEAD (see SessionGitOptions) -- exactly what a fork wants by default.
+    local git = opts.branch_name and {
+      branch_name = opts.branch_name,
+      base_branch = opts.base_branch,
+    } or nil
+    local _, lerr = client:launch_runner(source.host_id, {
+      session_id = fork.id,
+      workspace = source.workspace,
+      git = git,
+    })
+    if lerr then
+      lerr.fork_session_id = fork.id
+      return nil, lerr
+    end
+  end
+
+  return fork
+end
+
 ---Load an existing durable session: fetch snapshot + durable items.
 ---@param session_id string
 ---@return table|nil result { session, items }, table|nil err

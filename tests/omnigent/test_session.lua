@@ -468,4 +468,87 @@ T["stop_stream drops the local subscription only"] = function()
   h.eq(s:streaming(), false)
 end
 
+-- ---- Fork (static) --------------------------------------------------------
+
+---A request stub that records every call and answers fork/launch endpoints.
+local function fork_router(cap)
+  return function(o)
+    cap.calls[#cap.calls + 1] = o
+    if o.method == "post" and o.url:find("/fork", 1, true) then
+      cap.fork = o
+      return { status = 200, body = vim.json.encode(cap.fork_resp or { id = "conv_2", status = "idle" }) }
+    elseif o.method == "post" and o.url:find("/runners", 1, true) then
+      cap.launch = o
+      if cap.launch_status and cap.launch_status >= 400 then
+        return { status = cap.launch_status, body = '{"error":{"message":"boom","code":"launch_failed"}}' }
+      end
+      return { status = 200, body = vim.json.encode({ runner_id = "run_1", status = "starting" }) }
+    end
+    return { status = 404, body = "{}" }
+  end
+end
+
+T["fork on a host-launched source forks then launches a worktree runner"] = function()
+  local cap = { calls = {} }
+  local c = client.new({ url = "http://x", request = fork_router(cap) })
+  local fork, err = session.fork(c, {
+    session_id = "conv_1",
+    host_id = "host_mac",
+    workspace = "/repo",
+  }, { branch_name = "cc-fork-1" })
+
+  h.eq(err, nil)
+  h.eq(fork.id, "conv_2")
+  h.is_true(cap.fork ~= nil)
+  h.is_true(cap.launch ~= nil)
+  local launch = vim.json.decode(cap.launch.body)
+  h.eq(launch.session_id, "conv_2")
+  h.eq(launch.workspace, "/repo")
+  h.eq(launch.git.branch_name, "cc-fork-1")
+  -- base_branch=nil => server branches from the source HEAD.
+  h.eq(launch.git.base_branch, nil)
+end
+
+T["fork on a headless source does NOT launch a runner"] = function()
+  local cap = { calls = {} }
+  local c = client.new({ url = "http://x", request = fork_router(cap) })
+  local fork, err = session.fork(c, { session_id = "conv_1" }, { branch_name = "cc-fork-1" })
+  h.eq(err, nil)
+  h.eq(fork.id, "conv_2")
+  h.is_true(cap.fork ~= nil)
+  h.eq(cap.launch, nil)
+end
+
+T["fork refuses a host source with no workspace (before launching)"] = function()
+  local cap = { calls = {} }
+  local c = client.new({ url = "http://x", request = fork_router(cap) })
+  local fork, err = session.fork(c, { session_id = "conv_1", host_id = "host_mac" })
+  h.eq(fork, nil)
+  h.eq(err.code, "workspace_required")
+  -- The fork was still created; only the launch is impossible.
+  h.is_true(cap.fork ~= nil)
+  h.eq(cap.launch, nil)
+end
+
+T["fork surfaces a launch failure carrying the unbound fork id"] = function()
+  local cap = { calls = {}, launch_status = 503 }
+  local c = client.new({ url = "http://x", request = fork_router(cap) })
+  local fork, err = session.fork(c, {
+    session_id = "conv_1",
+    host_id = "host_mac",
+    workspace = "/repo",
+  }, { branch_name = "cc-fork-1" })
+  h.eq(fork, nil)
+  h.eq(err.code, "launch_failed")
+  -- The caller can resume this created-but-unbound fork to retry a runner.
+  h.eq(err.fork_session_id, "conv_2")
+end
+
+T["fork requires a source session id"] = function()
+  local c = client.new({ url = "http://x", request = fork_router({ calls = {} }) })
+  local fork, err = session.fork(c, {})
+  h.eq(fork, nil)
+  h.eq(err.code, "session_required")
+end
+
 return T

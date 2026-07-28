@@ -328,6 +328,29 @@ function Client:create_session(body)
   return self:request("post", "/v1/sessions", { body = body })
 end
 
+---Fork an existing session into a new, unbound session (deep-copies items and
+---clones the agent). The fork returns `idle` with NO runner/host/workspace --
+---the caller must bind a runner (see `launch_runner`) before it can post a turn.
+---@param source_id string Session to fork, e.g. `"conv_abc123"`.
+---@param body? table { title?, agent_id?, up_to_response_id? }
+---@return table|nil session, table|nil err
+function Client:fork_session(source_id, body)
+  -- vim.empty_dict() so an omitted body serializes as `{}` (object), not `[]`.
+  return self:request("post", "/v1/sessions/" .. source_id .. "/fork", { body = body or vim.empty_dict() })
+end
+
+---Launch a runner on a host for a session (`POST /v1/hosts/{host_id}/runners`).
+---Binds the runner and starts it. With `git`, the server creates a worktree off
+---`workspace` (the source repo) and binds the runner there -- the fork-resume
+---path. A native fork carries history only when this launches on the SAME host
+---the source ran on (the host clones the source's local transcript at boot).
+---@param host_id string Target host, e.g. `"host_a1b2c3d4"`.
+---@param body table { session_id, workspace, git?={ branch_name, base_branch, existing_worktree? } }
+---@return table|nil result, table|nil err  result: { runner_id, status }
+function Client:launch_runner(host_id, body)
+  return self:request("post", "/v1/hosts/" .. host_id .. "/runners", { body = body })
+end
+
 ---@param params? table
 ---@return table[]|nil sessions, table|nil err
 function Client:list_sessions(params)
