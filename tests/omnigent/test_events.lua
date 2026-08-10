@@ -317,6 +317,163 @@ T["unknown events surface as 'other'"] = function()
   h.eq(u[1].type, "session.brand_new_thing")
 end
 
+-- ---- Tool call / result dedup (the two-events-per-call omnigent contract) ----
+
+---Feed one `response.output_item.done` frame.
+local function item_done(r, item)
+  return r:handle({ type = "response.output_item.done", json = { type = "response.output_item.done", item = item } })
+end
+
+local function open_response(r, id)
+  return r:handle({
+    type = "response.created",
+    json = { type = "response.created", response = { id = id, model = "polly" } },
+  })
+end
+
+local OBSERVED = {
+  id = "fc_aaaaaaaaaaaa",
+  type = "function_call",
+  status = "in_progress",
+  name = "sys_os_shell",
+  arguments = '{"command":"ls"}',
+  call_id = "toolu_vrtx_01ABC",
+  response_id = "resp_1",
+}
+local DISPATCHED = vim.tbl_extend("force", OBSERVED, { id = "fc_bbbbbbbbbbbb", status = "completed" })
+
+T["a tool call emitted twice is marked duplicate on the second arrival"] = function()
+  local r = events.new()
+  open_response(r, "resp_1")
+
+  local first = item_done(r, OBSERVED)
+  h.eq(#first, 1)
+  h.eq(first[1].kind, "item_committed")
+  h.eq(first[1].item_type, "function_call")
+  h.eq(first[1].call_id, "toolu_vrtx_01ABC")
+  h.eq(first[1].duplicate, false)
+
+  -- Same call_id, DIFFERENT item.id -- which is exactly why item.id can't dedupe.
+  local second = item_done(r, DISPATCHED)
+  h.eq(#second, 1)
+  h.eq(second[1].duplicate, true)
+  h.is_true(second[1].item_id ~= first[1].item_id)
+end
+
+T["distinct tool calls in one response are never marked duplicate"] = function()
+  local r = events.new()
+  open_response(r, "resp_1")
+  local a = item_done(r, vim.tbl_extend("force", OBSERVED, { call_id = "toolu_A" }))
+  local b = item_done(r, vim.tbl_extend("force", OBSERVED, { call_id = "toolu_B" }))
+  h.eq(a[1].duplicate, false)
+  h.eq(b[1].duplicate, false)
+end
+
+T["tool call dedup resets at a response boundary (call_id reuse across turns)"] = function()
+  local r = events.new()
+  open_response(r, "resp_1")
+  h.eq(item_done(r, OBSERVED)[1].duplicate, false)
+  h.eq(item_done(r, DISPATCHED)[1].duplicate, true)
+
+  -- A genuinely new task may reuse the same SDK-shaped call_id; it must render.
+  open_response(r, "resp_2")
+  h.eq(item_done(r, OBSERVED)[1].duplicate, false)
+end
+
+T["tool results dedupe per response id"] = function()
+  local r = events.new()
+  open_response(r, "resp_1")
+  local out = {
+    id = "fco_aaaaaaaaaaaa",
+    type = "function_call_output",
+    call_id = "toolu_vrtx_01ABC",
+    output = "ok",
+    response_id = "resp_1",
+  }
+  h.eq(item_done(r, out)[1].duplicate, false)
+  -- The `response.completed` flush re-emits the same result with a new item id.
+  h.eq(item_done(r, vim.tbl_extend("force", out, { id = "fco_bbbbbbbbbbbb" }))[1].duplicate, true)
+end
+
+T["a backdated result for another response is not suppressed"] = function()
+  -- Rid-scoped key: a cross-turn result carrying a REUSED call_id must not eat
+  -- the live turn's real result.
+  local r = events.new()
+  open_response(r, "resp_1")
+  local out = { id = "fco_1", type = "function_call_output", call_id = "toolu_X", output = "a", response_id = "resp_1" }
+  h.eq(item_done(r, out)[1].duplicate, false)
+  local other = vim.tbl_extend("force", out, { id = "fco_2", response_id = "resp_other" })
+  h.eq(item_done(r, other)[1].duplicate, false)
+end
+
+T["assistant message items are never flagged duplicate"] = function()
+  local r = events.new()
+  open_response(r, "resp_1")
+  local u = item_done(r, {
+    id = "msg_1",
+    type = "message",
+    role = "assistant",
+    content = { { type = "output_text", text = "hi" } },
+  })
+  h.eq(u[1].duplicate, nil)
+  h.eq(u[1].text, "hi")
+end
+
+T["a reconnect replay of an already-seen tool call stays deduped"] = function()
+  -- reset_inflight() clears accumulated TEXT but must NOT clear the tool dedup
+  -- sets, else the stream-subscribe replay re-renders every tool line.
+  local r = events.new()
+  open_response(r, "resp_1")
+  h.eq(item_done(r, OBSERVED)[1].duplicate, false)
+  r:reset_inflight()
+  h.eq(item_done(r, DISPATCHED)[1].duplicate, true)
+end
+
+T["captured live stream: every tool call surfaces exactly once"] = function()
+  -- Recorded off a real claude-sdk session (2026-08-06). Thirteen
+  -- `function_call` frames for seven distinct calls -- the observed/dispatch
+  -- pair described on Reducer:_dedupe_tool_item (six pairs, plus one call whose
+  -- observed frame predates the capture). Note the interleaving: two calls open
+  -- (in_progress) before either completes, which is why an un-deduped renderer
+  -- draws them in the order A, B, A, B.
+  local updates = run_sse("sse-tool-dedupe.txt")
+
+  local calls, results = {}, {}
+  local raw_calls = 0
+  for _, u in ipairs(updates) do
+    if u.kind == "item_committed" and u.item_type == "function_call" then
+      raw_calls = raw_calls + 1
+      if not u.duplicate then
+        calls[#calls + 1] = u.call_id
+      end
+    elseif u.kind == "item_committed" and u.item_type == "function_call_output" then
+      if not u.duplicate then
+        results[#results + 1] = u.call_id
+      end
+    end
+  end
+
+  -- The wire really does carry nearly twice as many call frames as calls.
+  h.eq(raw_calls, 13)
+  h.eq(#calls, 7)
+
+  -- Every rendered call_id is distinct.
+  local seen = {}
+  for _, id in ipairs(calls) do
+    h.eq(seen[id], nil)
+    seen[id] = true
+  end
+
+  -- Every result pairs to a rendered call and is itself rendered once.
+  h.eq(#results, 7)
+  local seen_results = {}
+  for _, id in ipairs(results) do
+    h.eq(seen[id], true)
+    h.eq(seen_results[id], nil)
+    seen_results[id] = true
+  end
+end
+
 T["model / effort / options updates track state"] = function()
   local r = events.new()
   local m = r:handle({ type = "session.model", json = { type = "session.model", model = "claude-opus-4-8" } })

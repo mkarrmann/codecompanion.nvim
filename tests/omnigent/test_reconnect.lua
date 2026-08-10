@@ -160,6 +160,151 @@ T["reconcile skips items already rendered live (seen_items)"] = function()
   h.eq(#rendered, 0)
 end
 
+-- ---- The two-events-per-tool-call contract, end to end ----------------------
+
+---Buffer lines rendered for a tool-call marker naming `name`.
+local function tool_lines(chat, name)
+  return vim.tbl_filter(function(b)
+    return b.content and b.content:find("`" .. name .. "`", 1, true) ~= nil
+  end, chat.buf_calls)
+end
+
+T["a tool call streamed twice renders exactly one line"] = function()
+  -- Omnigent emits an inline observed item (status=in_progress) and the
+  -- authoritative dispatch item (status=completed) with the SAME call_id but
+  -- DIFFERENT item ids. Clients must keep the first.
+  local s, chat = setup({
+    {
+      { event = "response.created", data = { response = { id = "resp_1", model = "polly" } } },
+      {
+        event = "response.output_item.done",
+        data = {
+          item = {
+            id = "fc_observed",
+            type = "function_call",
+            status = "in_progress",
+            name = "sys_os_shell",
+            arguments = '{"command":"sl status"}',
+            call_id = "toolu_1",
+          },
+        },
+      },
+      {
+        event = "response.output_item.done",
+        data = {
+          item = {
+            id = "fc_dispatched",
+            type = "function_call",
+            status = "completed",
+            name = "sys_os_shell",
+            arguments = '{"command":"sl status"}',
+            call_id = "toolu_1",
+          },
+        },
+      },
+    },
+  })
+  s:start_stream()
+  h.eq(#tool_lines(chat, "sys_os_shell"), 1)
+  -- Both arrivals still register the call so a reconcile can't replay it.
+  h.eq(s.seen_calls["toolu_1"], true)
+end
+
+T["reconcile skips a tool call already rendered live (call_id, not item id)"] = function()
+  -- The store id (32-hex) NEVER matches the stream's `fc_<uuid>`, so an
+  -- item-id-keyed filter replays every tool call on reconnect. call_id is the
+  -- only correlator shared by both namespaces.
+  local s, chat = setup({
+    {
+      { event = "response.created", data = { response = { id = "resp_1", model = "polly" } } },
+      {
+        event = "response.output_item.done",
+        data = {
+          item = {
+            id = "fc_stream_id",
+            type = "function_call",
+            name = "sys_os_shell",
+            arguments = '{"command":"sl log"}',
+            call_id = "toolu_2",
+          },
+        },
+      },
+      { exit = 1 },
+    },
+    {},
+  }, {
+    items = {
+      {
+        id = "4eba329a0ea5462e83f8493bde2417ee", -- durable store id, unrelated to fc_stream_id
+        type = "function_call",
+        name = "sys_os_shell",
+        arguments = '{"command":"sl log"}',
+        call_id = "toolu_2",
+      },
+    },
+  })
+  s:start_stream()
+  h.eq(#tool_lines(chat, "sys_os_shell"), 1)
+end
+
+T["reconcile skips a user message already delivered via input.consumed"] = function()
+  -- `session.input.consumed` is the only stream event carrying a user item's
+  -- durable id; without folding it in, every reconcile replays the prompt.
+  local s, chat = setup({
+    {
+      {
+        event = "session.input.consumed",
+        data = { data = { item_id = "731ba88ac7f543958fc589c972f25069", type = "message" } },
+      },
+      { exit = 1 },
+    },
+    {},
+  }, {
+    items = {
+      {
+        id = "731ba88ac7f543958fc589c972f25069",
+        type = "message",
+        role = "user",
+        content = { { type = "input_text", text = "Explain my commit stack" } },
+      },
+    },
+  })
+  s:start_stream()
+  local replayed = vim.tbl_filter(function(b)
+    return b.content and b.content:find("Explain my commit stack", 1, true) ~= nil
+  end, chat.buf_calls)
+  h.eq(#replayed, 0)
+end
+
+T["an empty reconcile batch does not append a second input anchor"] = function()
+  -- The common case: a heartbeat-forced reconnect on an idle session missed
+  -- nothing. Restoring the anchor then orphans the `## Me` chat:done left.
+  local s, chat = setup({
+    { { exit = 1 } },
+    {},
+  }, {
+    items = {
+      { id = "seen_1", type = "message", role = "assistant", content = { { type = "output_text", text = "old" } } },
+    },
+  })
+  s.seen_items["seen_1"] = true
+  s:start_stream()
+  h.eq(chat.input_anchor_resets, 0)
+end
+
+T["a non-empty reconcile batch still restores the input anchor"] = function()
+  local s, chat = setup({
+    { { exit = 1 } },
+    {},
+  }, {
+    items = {
+      { id = "missed_1", type = "message", role = "assistant", content = { { type = "output_text", text = "new" } } },
+    },
+  })
+  s:start_stream()
+  h.eq(chat.input_anchor_resets, 1)
+end
+
 T["no reconnect when neither background_updates nor stream_reconnect is set"] = function()
   local s, _, jstats = setup({
     { { exit = 1 } },

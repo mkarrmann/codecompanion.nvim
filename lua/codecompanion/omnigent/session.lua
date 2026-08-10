@@ -106,7 +106,20 @@ function Session.new(opts)
     reducer = Events.new(),
     callbacks = opts.callbacks or {},
     observer = nil,
+    -- "Already materialised in this chat" bookkeeping, consulted by _reconcile.
+    -- THREE sets, because the stream and the durable store do not share an id
+    -- namespace for every item type:
+    --   * seen_items      -- store ids (32-hex). Only messages reach the stream
+    --                        carrying their store id; user messages arrive via
+    --                        `session.input.consumed`, which does carry it.
+    --   * seen_calls      -- call_ids of rendered tool calls. Tool items reach
+    --                        the stream with a freshly-minted `fc_<uuid>` id
+    --                        that is NOT the store id, so call_id is the only
+    --                        stable correlator between stream and store.
+    --   * seen_call_outputs -- ditto for `fco_<uuid>` tool results.
     seen_items = {},
+    seen_calls = {},
+    seen_call_outputs = {},
     _stream = nil,
     _stopping = false,
     _reconnect_scheduled = false,
@@ -434,14 +447,49 @@ function Session:load(session_id)
     -- Fail loudly: an empty resume must be distinguishable from a failed fetch.
     return nil, ierr
   end
-  -- Seed the seen-items set so a later reconnect reconcile doesn't re-render
-  -- history that was already hydrated on load.
+  -- Seed the seen sets so a later reconnect reconcile doesn't re-render history
+  -- that was already hydrated on load.
   for _, item in ipairs(items) do
-    if item.id then
-      self.seen_items[item.id] = true
-    end
+    self:_mark_seen(item.id, item.type, item.call_id)
   end
   return { session = s, items = items }
+end
+
+---Record that an item has materialised in the chat, under every key that could
+---identify it later. Tolerates nils (an id-less or call-id-less item).
+---@param item_id? string
+---@param item_type? string
+---@param call_id? string
+function Session:_mark_seen(item_id, item_type, call_id)
+  if item_id then
+    self.seen_items[item_id] = true
+  end
+  if not call_id then
+    return
+  end
+  if item_type == "function_call" then
+    self.seen_calls[call_id] = true
+  elseif item_type == "function_call_output" then
+    self.seen_call_outputs[call_id] = true
+  end
+end
+
+---Has this durable item (from GET /items) already been rendered into the chat?
+---@param item table
+---@return boolean
+function Session:_already_seen(item)
+  if item.id and self.seen_items[item.id] then
+    return true
+  end
+  if not item.call_id then
+    return false
+  end
+  if item.type == "function_call" then
+    return self.seen_calls[item.call_id] == true
+  elseif item.type == "function_call_output" then
+    return self.seen_call_outputs[item.call_id] == true
+  end
+  return false
 end
 
 ---Fold a normalised update into local state (status/model/usage tracking).
@@ -465,9 +513,12 @@ function Session:_apply_state(u)
     -- Single source of truth for "what durable items have materialised in this
     -- chat" -- populated for BOTH foreground and background updates so a
     -- reconnect reconcile can skip anything already rendered live.
-    if u.item_id then
-      self.seen_items[u.item_id] = true
-    end
+    self:_mark_seen(u.item_id, u.item_type, u.call_id)
+  elseif u.kind == "input_consumed" then
+    -- A user message we (or another client) posted. `session.input.consumed`
+    -- is the ONLY stream event carrying a user item's durable store id, so
+    -- without this every reconcile replays the user's own prompt.
+    self:_mark_seen(u.item_id, "message", nil)
   elseif u.kind == "elicitation" then
     self.pending_elicitations = self.pending_elicitations or {}
     if u.elicitation_id then
@@ -626,9 +677,11 @@ function Session:_reconcile()
     self.observer:reconcile_begin()
   end
   for _, item in ipairs(items) do
-    local id = item.id
-    if id and not self.seen_items[id] then
-      self.seen_items[id] = true
+    -- An item with no identifier at all can never be marked seen, so rendering
+    -- it would duplicate on every subsequent reconcile. Skip it.
+    local identifiable = item.id ~= nil or item.call_id ~= nil
+    if identifiable and not self:_already_seen(item) then
+      self:_mark_seen(item.id, item.type, item.call_id)
       -- While a background turn is mid-render, skip reconciling assistant message
       -- items: the one in flight is being rendered live (and its committed id may
       -- not line up with the id-less deltas), so re-rendering it would duplicate.

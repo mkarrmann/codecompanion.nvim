@@ -13,7 +13,9 @@
 --  * deltas carry no ids -> content accumulation, not id dedup, is authoritative;
 --  * `session.interrupted` (not `response.cancelled`) ends an interrupted turn;
 --  * `turn.*` events are never emitted in a normal turn -> treated as ambient;
---  * reasoning text is transient and is never reconciled across reconnect.
+--  * reasoning text is transient and is never reconciled across reconnect;
+--  * tool calls and tool results each arrive TWICE and MUST be deduped by
+--    `call_id` -- see the block comment on `_seen_calls` below.
 --
 -- handle() returns a LIST of updates (0..n) so a single wire event can expand
 -- (e.g. a background delta -> [turn_started, message_delta]). Each update:
@@ -40,6 +42,8 @@ local M = {}
 ---@field _native_queue_response boolean The open response belongs to native input delivery, not model output
 ---@field _message_delta_seen boolean The current logical turn emitted assistant text deltas
 ---@field _expected_pending_id? string Pending input owned by the foreground CodeCompanion request
+---@field _seen_calls table<string,true> call_ids already surfaced as a tool-call item this response
+---@field _seen_call_outputs table<string,true> `<rid>:<call_id>` keys already surfaced as a tool result
 local Reducer = {}
 Reducer.__index = Reducer
 
@@ -84,6 +88,8 @@ function M.new()
     _native_queue_response = false,
     _message_delta_seen = false,
     _expected_pending_id = nil,
+    _seen_calls = {},
+    _seen_call_outputs = {},
   }, Reducer)
 end
 
@@ -169,6 +175,18 @@ local function close_turn(self, rid)
   end
 end
 
+---Drop the per-response tool dedup sets at a response boundary.
+---
+---SCOPE IS PER-RESPONSE, not per-session: the underlying SDK can legitimately
+---reuse a `toolu_*` call_id across separate tasks, and a session-wide set would
+---silently swallow a later turn's real tool call. Mirrors `beginResponse` in
+---omnigent's `web/src/lib/blockStream.ts`.
+---@param self CodeCompanion.Omnigent.Reducer
+local function reset_tool_dedup(self)
+  self._seen_calls = {}
+  self._seen_call_outputs = {}
+end
+
 ---Clear terminal-backed turn correlation state.
 ---@param self CodeCompanion.Omnigent.Reducer
 local function reset_native(self)
@@ -178,6 +196,51 @@ local function reset_native(self)
   self._native_queue_response = false
   self._message_delta_seen = false
   self._expected_pending_id = nil
+end
+
+---Decide whether a `call_id`-bearing durable item is the SECOND arrival of a
+---tool call / tool result, and record it if it is the first.
+---
+---Omnigent emits each of these twice, by design, from two different producers:
+---
+---  * function_call -- an "observed" item emitted INLINE as the inner SDK parses
+---    each `tool_use` block (`status="in_progress"`, from `ToolCallRequest` in
+---    `omnigent/runtime/harnesses/_executor_adapter.py`), and the authoritative
+---    dispatch item emitted when the tool actually runs (`status="completed"`,
+---    from `dispatch_tool` in `_scaffold.py`). The inline one exists purely so
+---    the tool line renders interleaved with assistant text instead of bunching
+---    at end-of-turn; the adapter threads the SDK's `tool_use_id` through both
+---    so they share a `call_id`, and clients are expected to keep the FIRST and
+---    drop the second. The two carry different `item.id`s, so `item.id` is NOT a
+---    usable dedup key.
+---  * function_call_output -- fires once inline from `_dispatch_action_required`
+---    when the dispatch returns, and again from the `response.completed` flush.
+---
+---This is a real (if undocumented) client contract: both first-party clients
+---implement it -- `seen_call_ids`/`seen_result_call_ids` in the Python SDK's
+---`BlockStream`, and `seenCallIds`/`seenResultCallIds` in the web UI's
+---`blockStream.ts`. Without it every tool renders twice.
+---
+---Results are keyed `<response_id>:<call_id>` rather than bare `call_id` so a
+---backdated cross-turn result for a reused call_id can't suppress the live
+---turn's real result (same rationale as the web UI's `resultKey`).
+---@param item table The durable item from `response.output_item.done`
+---@param rid? string The response id the item belongs to
+---@return boolean duplicate True if this call/result already surfaced
+function Reducer:_dedupe_tool_item(item, rid)
+  if item.type == "function_call" then
+    if self._seen_calls[item.call_id] then
+      return true
+    end
+    self._seen_calls[item.call_id] = true
+  elseif item.type == "function_call_output" then
+    local key = (rid or "") .. ":" .. item.call_id
+    if self._seen_call_outputs[key] then
+      return true
+    end
+    self._seen_call_outputs[key] = true
+  end
+  return false
 end
 
 ---Normalise a decoded SSE event into zero or more updates.
@@ -205,6 +268,9 @@ function Reducer:handle(event)
     local r = j.response or {}
     self._native_queue_response = type(r.model) == "string" and r.model:match("%-native%-ui$") ~= nil
     local u = open_turn(self, r.id, r.model, false)
+    if u then
+      reset_tool_dedup(self)
+    end
     return u and { u } or {}
   elseif t == "response.output_text.delta" then
     local rid = self.current_response_id
@@ -276,6 +342,7 @@ function Reducer:handle(event)
     end
     if item.call_id then
       update.call_id = item.call_id
+      update.duplicate = self:_dedupe_tool_item(item, rid)
     end
     return { update }
   elseif t == "response.completed" then

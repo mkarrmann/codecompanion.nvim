@@ -366,6 +366,12 @@ end
 ---@param u CodeCompanion.Omnigent.Update
 function OmnigentHandler:_render_item(u)
   local MT = self.chat.MESSAGE_TYPES
+  if u.duplicate then
+    -- Second arrival of a tool call / result that already rendered. See
+    -- Reducer:_dedupe_tool_item -- omnigent emits both by design and expects the
+    -- client to keep the first.
+    return
+  end
   if u.item_type == "function_call" then
     -- Surface the committed tool call for external consumers (diff tracking, task
     -- attribution): `item.arguments` (a JSON string of the tool params) is the

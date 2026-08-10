@@ -161,6 +161,14 @@ function Observer:handle_update(u)
   local MT = self.chat.MESSAGE_TYPES
   local k = u.kind
 
+  -- Second arrival of a tool call / result that already rendered. See
+  -- Reducer:_dedupe_tool_item -- omnigent emits both by design and expects the
+  -- client to keep the first. Dropped before `writes_buffer` so it can't trigger
+  -- a spurious input-anchor restore either.
+  if k == "item_committed" and u.duplicate then
+    return
+  end
+
   -- Never write into the buffer while the user is composing input: it would
   -- clobber the trailing input section. Skip live rendering of the rendering
   -- update kinds (the turn is still durable server-side and reconciles later).
@@ -312,13 +320,20 @@ end
 ---the whole batch rather than once per missed item.
 function Observer:reconcile_begin()
   self._recovered_pending = true
+  self._reconciled_any = false
 end
 
----End a reconnect-reconcile batch and restore the user input anchor once (a batch
----may have written buffer content out-of-band).
+---End a reconnect-reconcile batch and restore the user input anchor once -- but
+---ONLY if the batch actually wrote something. The common case is an empty batch
+---(a heartbeat-forced reconnect on an idle session missed nothing), and
+---restoring then appends a second `## Me` anchor, orphaning the one the finished
+---turn already left behind.
 function Observer:reconcile_end()
   self._recovered_pending = nil
-  self:_restore_input()
+  if self._reconciled_any then
+    self._reconciled_any = false
+    self:_restore_input()
+  end
 end
 
 ---Render a durable item fetched during reconnect reconcile (see Session:_reconcile).
@@ -338,6 +353,7 @@ function Observer:reconcile_item(item)
   if not msg then
     return
   end
+  self._reconciled_any = true
   local MT = self.chat.MESSAGE_TYPES
   local mtype = (msg.role == config.constants.USER_ROLE) and MT.USER_MESSAGE or MT.LLM_MESSAGE
   -- One "recovered" header per reconcile batch (see reconcile_begin); assistant
