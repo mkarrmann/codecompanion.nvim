@@ -150,15 +150,17 @@ T["reconcile does not block: it renders only once the fetch completes"] = functi
   -- editor for the request budget. Hold the response open and assert that
   -- reconcile returned with nothing rendered -- a blocking implementation could
   -- not reach that point.
-  local cap = { items = {
-    {
-      id = "msg_slow",
-      type = "message",
-      role = "assistant",
-      response_id = "resp_slow",
-      content = { { type = "output_text", text = "arrived late" } },
+  local cap = {
+    items = {
+      {
+        id = "msg_slow",
+        type = "message",
+        role = "assistant",
+        response_id = "resp_slow",
+        content = { { type = "output_text", text = "arrived late" } },
+      },
     },
-  } }
+  }
   local route = router(cap)
   local pending
   local c = client.new({
