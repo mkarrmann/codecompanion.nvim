@@ -65,7 +65,9 @@ log("seed turn 1:", tostring(turn("List 8 common HTTP status codes, one per line
 log("seed turn 2:", tostring(turn("Now list 8 common Unix signals, one per line.")))
 
 local before = turns
+local buf_before = #chat.buf_calls
 log("--- compaction.request (expect control_event -> 4xx -> slash_command) ---")
+log("session.status at request time:", tostring(s.status))
 local ok, err = compaction.request(chat)
 log("request accepted:", tostring(ok), err and vim.inspect(err) or "")
 
@@ -81,11 +83,19 @@ local note = vim.tbl_filter(function(b)
 end, chat.buf_calls)
 log("marker written:", #note == 1 and note[1].content:gsub("\n", " | ") or "NO")
 
--- The agent must NOT have answered "/compact" as if it were a prompt.
-local replied = vim.tbl_filter(function(b)
-  return b.type == "llm_msg" and type(b.content) == "string" and #b.content > 0
-end, chat.buf_calls)
-log("assistant output during the compact turn:", #replied > 0 and "SOME (check above)" or "none (intercepted)")
+-- The agent must NOT have answered "/compact" as if it were a prompt, so only
+-- look at what was written AFTER the request (the seed turns wrote plenty).
+local replied = {}
+for i = buf_before + 1, #chat.buf_calls do
+  local b = chat.buf_calls[i]
+  if b.type == "llm_msg" and type(b.content) == "string" and #b.content > 0 then
+    replied[#replied + 1] = b.content
+  end
+end
+log(
+  "assistant output during the compact turn:",
+  #replied > 0 and ("SOME -> " .. table.concat(replied):sub(1, 120)) or "none (intercepted)"
+)
 
 s:stop_stream()
 s.client:post_event(s.session_id, { type = "stop_session", data = vim.empty_dict() })

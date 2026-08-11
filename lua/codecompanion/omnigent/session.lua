@@ -500,6 +500,17 @@ end
 function Session:_apply_state(u)
   if u.kind == "status" then
     self.status = u.status or self.status
+  elseif
+    u.kind == "turn_completed"
+    or u.kind == "turn_failed"
+    or u.kind == "turn_cancelled"
+    or u.kind == "interrupted"
+  then
+    -- A turn ending means the session is no longer occupied, but `session.status`
+    -- arrives as its OWN event and can trail the terminal response event. Anything
+    -- gating on `busy()` right after a turn (compaction, most visibly) would see a
+    -- stale "running" and refuse. Settle it here; a later status event still wins.
+    self.status = "idle"
   elseif u.kind == "model" then
     if u.model then
       self.model = u.model

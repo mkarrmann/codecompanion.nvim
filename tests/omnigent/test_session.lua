@@ -629,6 +629,23 @@ T["compact reports an HTTP rejection to its callback"] = function()
   h.is_true(got.err.message:find("Cannot compact", 1, true) ~= nil)
 end
 
+T["a turn ending settles status so busy() cannot go stale"] = function()
+  -- `session.status` is its own event and can trail the terminal response event.
+  -- Without this, anything gating on busy() right after a turn (compaction) sees a
+  -- stale "running" and refuses.
+  local cap = {}
+  local s = compactable(cap)
+  for _, kind in ipairs({ "turn_completed", "turn_failed", "turn_cancelled", "interrupted" }) do
+    s.status = "running"
+    s:_apply_state({ kind = kind })
+    h.eq(s.status, "idle")
+    h.eq(s:busy(), false)
+  end
+  -- An explicit status event still wins afterwards.
+  s:_apply_state({ kind = "status", status = "running" })
+  h.eq(s:busy(), true)
+end
+
 T["compaction_completed merges into usage without clobbering cost"] = function()
   local cap = {}
   local s = compactable(cap)
