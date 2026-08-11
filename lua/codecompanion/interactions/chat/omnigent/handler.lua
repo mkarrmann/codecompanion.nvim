@@ -205,6 +205,49 @@ function OmnigentHandler:_unsent_user_text()
   return table.concat(parts, "\n\n"), marked
 end
 
+---Rewrite a LEADING agent-command escape (`\cmd`) into the slash command the
+---harness itself understands (`/cmd`).
+---
+---CLI-backed harnesses intercept slash commands out of the input stream, but
+---CodeCompanion claims the `/` namespace first: a `/help` or `/mcp` typed in a
+---chat runs CodeCompanion's version and never reaches the agent, and `/compact`
+---only reaches it today because the builtin happens to be gated to HTTP adapters.
+---The `\` prefix is the deliberate "this one is for the agent" signal, mirroring
+---the ACP path (ACPHandler:transform_acp_commands) so the habit transfers.
+---
+---Only a LEADING token is rewritten. ACP can replace commands anywhere because it
+---has the agent's advertised command list to match against; omnigent advertises
+---none, so a positional rule is the only safe one. A doubled prefix (`\\cmd`)
+---escapes to a literal `\cmd` for the rare case of genuinely sending one.
+---@param text string
+---@param trigger? string
+---@return string
+function OmnigentHandler.transform_agent_command(text, trigger)
+  if type(text) ~= "string" or text == "" then
+    return text
+  end
+  trigger = trigger or "\\"
+  local esc = vim.pesc(trigger)
+  local doubled = text:match("^%s*" .. esc .. esc .. "([%w][-%w]*)")
+  if doubled then
+    return (text:gsub("^(%s*)" .. esc .. esc, "%1" .. trigger, 1))
+  end
+  if text:match("^%s*" .. esc .. "[%w][-%w]*") then
+    return (text:gsub("^(%s*)" .. esc, "%1/", 1))
+  end
+  return text
+end
+
+---The configured agent-command trigger, shared with the ACP path.
+---@return string
+local function agent_command_trigger()
+  local opts = config.interactions
+    and config.interactions.chat
+    and config.interactions.chat.slash_commands
+    and config.interactions.chat.slash_commands.opts
+  return (opts and opts.acp and opts.acp.trigger) or "\\"
+end
+
 ---@param marked table[]
 function OmnigentHandler:_mark_sent(marked)
   for _, m in ipairs(marked) do
@@ -259,7 +302,9 @@ function OmnigentHandler:submit(payload)
   -- Open the stream BEFORE posting: it is live-tail, not a replay source.
   session:start_stream()
 
-  local res, perr = session:post_message(text)
+  -- Rewrite on the WIRE only: the transcript keeps what the user actually typed,
+  -- matching how the ACP path transforms its payload rather than its history.
+  local res, perr = session:post_message(OmnigentHandler.transform_agent_command(text, agent_command_trigger()))
   if not res then
     self:_render_error(perr or "Failed to post message")
     self:_complete("error") -- fires RequestFinished + chat:done + detaches

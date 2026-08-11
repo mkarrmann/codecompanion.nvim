@@ -424,6 +424,35 @@ T["done fires only once even if extra terminal events arrive"] = function()
   h.eq(chat.status, "success")
 end
 
+T["a leading \\cmd is sent to the agent as /cmd"] = function()
+  -- CodeCompanion owns the `/` namespace in a chat, so `\` is the escape that
+  -- reaches the harness's own slash commands.
+  local chat, handler, cap = setup({})
+  chat.messages = { { role = "user", content = "\\compact", _meta = {} } }
+  handler:submit({})
+
+  h.eq(vim.json.decode(cap.event.body).data.content[1].text, "/compact")
+  -- The transcript keeps what was typed; only the wire is rewritten.
+  h.eq(chat.messages[1].content, "\\compact")
+end
+
+T["transform_agent_command only rewrites a leading command token"] = function()
+  local f = OmnigentHandler.transform_agent_command
+  h.eq(f("\\compact"), "/compact")
+  h.eq(f("\\model claude-opus-5"), "/model claude-opus-5")
+  h.eq(f("  \\help"), "  /help")
+  -- A doubled prefix escapes to a literal backslash command.
+  h.eq(f("\\\\compact"), "\\compact")
+  -- Non-leading, non-command, and ordinary prose are untouched.
+  h.eq(f("run \\compact later"), "run \\compact later")
+  h.eq(f("\\ spaced"), "\\ spaced")
+  h.eq(f("use \\n for newline"), "use \\n for newline")
+  h.eq(f("plain text"), "plain text")
+  h.eq(f(""), "")
+  -- The trigger is configurable, matching the ACP path.
+  h.eq(f("!compact", "!"), "/compact")
+end
+
 T["mid-turn compaction renders a marker without ending the turn"] = function()
   -- A harness that compacts itself on context overflow emits the compaction pair
   -- inside a live turn. It is not a turn boundary: the request must stay open.
