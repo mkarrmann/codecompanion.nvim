@@ -23,6 +23,7 @@
 -- open is treated as a continuation (the reconnect-replay case), not a new turn.
 --=============================================================================
 
+local compaction = require("codecompanion.interactions.chat.omnigent.compaction")
 local config = require("codecompanion.config")
 local log = require("codecompanion.utils.log")
 local utils = require("codecompanion.utils")
@@ -172,6 +173,10 @@ function Observer:handle_update(u)
   -- Never write into the buffer while the user is composing input: it would
   -- clobber the trailing input section. Skip live rendering of the rendering
   -- update kinds (the turn is still durable server-side and reconciles later).
+  --
+  -- The compaction kinds are deliberately absent from this list: dropping one
+  -- would strand the progress indicator (they are terminal signals, not content),
+  -- and they write at most a single marker line.
   local writes_buffer = k == "turn_started"
     or k == "message_delta"
     or k == "reasoning_delta"
@@ -266,6 +271,8 @@ function Observer:handle_update(u)
       { role = C.LLM_ROLE, content = render.policy_denied_line(u) },
       { type = MT.SYSTEM_MESSAGE or MT.LLM_MESSAGE }
     )
+  elseif compaction.owns(k) then
+    compaction.handle_update(self.chat, u)
   elseif k == "turn_completed" then
     self:_fire_usage(u.usage)
     self:_finalize()
@@ -299,7 +306,7 @@ function Observer:handle_update(u)
     or k == "interrupted"
     or k == "turn_cancelled"
     or (k == "status" and u.status == "failed")
-  if writes_buffer or ends_turn then
+  if writes_buffer or ends_turn or compaction.owns(k) then
     self:_restore_input()
   end
 end

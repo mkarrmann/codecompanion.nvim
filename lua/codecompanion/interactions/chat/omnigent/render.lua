@@ -60,6 +60,13 @@ function M.durable_item_to_message(item)
     -- Tool output is folded under its call; resource events are terminal/setup
     -- noise. Neither becomes a standalone transcript message.
     return nil
+  elseif t == "compaction" then
+    -- `/items` flattens an item's `data` onto the item itself (as it does for a
+    -- message's role/content), but this is the one item type we have not observed
+    -- on the wire, so accept a nested `data` too rather than silently rendering an
+    -- empty marker.
+    local info = (type(item.data) == "table") and item.data or item
+    return { role = C.LLM_ROLE, content = M.compaction_marker(info), opts = { system = true } }
   end
 
   -- Unknown durable item: keep it visible as a compact system row rather than
@@ -183,6 +190,54 @@ function M.child_session_line(u)
   end
   local suffix = (#bits > 0) and (" (" .. table.concat(bits, " · ") .. ")") or ""
   return "\n> ↳ **sub-agent** " .. title .. suffix .. "\n"
+end
+
+---Human-readable token count for a compaction marker ("12.4k", "842").
+---@param n any
+---@return string|nil
+local function format_tokens(n)
+  if type(n) ~= "number" then
+    return nil
+  end
+  if n < 1000 then
+    return tostring(math.floor(n))
+  end
+  return string.format("%.1fk", n / 1000)
+end
+
+---The permanent boundary marker written where the model's context was condensed.
+---
+---The transcript ABOVE the marker is deliberately kept: omnigent owns the durable
+---history and CodeCompanion only ever posts unsent user text (see
+---OmnigentHandler:_unsent_user_text), so retaining it costs the model nothing and
+---keeps the human's scrollback intact. The marker records what the model can still
+---see, which is the part that actually changed.
+---@param info? table { total_tokens?, summary?, summary_model?, model?, token_count? }
+---@return string
+function M.compaction_marker(info)
+  info = type(info) == "table" and info or {}
+  local bits = {}
+  local tokens = format_tokens(info.total_tokens or info.token_count)
+  if tokens then
+    bits[#bits + 1] = tokens .. " tokens"
+  end
+  local model = info.summary_model or info.model
+  if type(model) == "string" and model ~= "" then
+    bits[#bits + 1] = "via " .. model
+  end
+  local suffix = (#bits > 0) and (" (" .. table.concat(bits, ", ") .. ")") or ""
+  local out = "\n> [!NOTE] Context compacted" .. suffix .. "\n"
+  local summary = info.summary
+  if type(summary) == "string" and summary ~= "" then
+    for _, line in ipairs(vim.split(vim.trim(summary), "\n", { plain = true })) do
+      out = out .. "> " .. line .. "\n"
+    end
+  else
+    out = out
+      .. "> The transcript above is kept for your reference but is no longer in the\n"
+      .. "> agent's context.\n"
+  end
+  return out
 end
 
 ---A compact one-line marker for a policy denial.

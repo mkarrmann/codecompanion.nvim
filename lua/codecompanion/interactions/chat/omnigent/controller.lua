@@ -52,9 +52,20 @@ function M.set_model(chat, model)
   })
 end
 
+---Request server-side context compaction (delegates to the compaction module,
+---which owns the progress indicator and the terminal-event wiring).
+---@param chat CodeCompanion.Chat
+---@return boolean ok, table|nil err
+function M.compact(chat)
+  return require("codecompanion.interactions.chat.omnigent.compaction").request(chat)
+end
+
 ---Tear down local resources for the chat (the durable server session lives on).
 ---@param chat CodeCompanion.Chat
 function M.close(chat)
+  -- Drop any compaction indicator/watchdog first: its timers outlive the buffer
+  -- otherwise, and would repaint into a dead bufnr.
+  require("codecompanion.interactions.chat.omnigent.compaction").cancel(chat)
   if chat.omnigent_session then
     chat.omnigent_session:stop_stream()
   end

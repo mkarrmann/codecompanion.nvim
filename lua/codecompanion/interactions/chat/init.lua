@@ -1327,6 +1327,14 @@ function Chat:resume_omnigent(session_id)
   return require("codecompanion.interactions.chat.omnigent.controller").resume(self, session_id)
 end
 
+---Request server-side context compaction of this chat's durable omnigent session.
+---Returns as soon as the request is accepted; the outcome is rendered when the
+---server reports it on the stream.
+---@return boolean ok, table|nil err
+function Chat:compact_omnigent()
+  return require("codecompanion.interactions.chat.omnigent.controller").compact(self)
+end
+
 ---Submit the chat buffer's contents to the LLM
 ---@param opts? table
 ---@return nil

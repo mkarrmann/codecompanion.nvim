@@ -324,6 +324,10 @@ function OmnigentHandler:on_update(u)
       { role = C.LLM_ROLE, content = render.policy_denied_line(u) },
       { type = MT.SYSTEM_MESSAGE or MT.LLM_MESSAGE }
     )
+  elseif require("codecompanion.interactions.chat.omnigent.compaction").owns(k) then
+    -- A harness can compact itself mid-turn on context overflow. This is NOT a
+    -- turn boundary: render the marker and keep streaming.
+    require("codecompanion.interactions.chat.omnigent.compaction").handle_update(self.chat, u)
   elseif k == "turn_completed" then
     self:_fire_usage(u.usage) -- response.completed.usage carries context_tokens
     self:_complete("success")

@@ -424,4 +424,24 @@ T["done fires only once even if extra terminal events arrive"] = function()
   h.eq(chat.status, "success")
 end
 
+T["mid-turn compaction renders a marker without ending the turn"] = function()
+  -- A harness that compacts itself on context overflow emits the compaction pair
+  -- inside a live turn. It is not a turn boundary: the request must stay open.
+  local chat, handler, cap = setup({})
+  handler:submit({})
+  cap.drive.on_stdout(
+    'event: response.compaction.in_progress\ndata: {"type":"response.compaction.in_progress","task_id":"c1"}\n\n'
+      .. 'event: response.compaction.completed\ndata: {"type":"response.compaction.completed","task_id":"c1","total_tokens":900}\n\n'
+  )
+
+  local marker = vim.tbl_filter(function(b)
+    return b.content:find("Context compacted", 1, true) ~= nil
+  end, chat.buf_calls)
+  h.eq(#marker, 1)
+  h.eq(chat.done_call, nil)
+  h.eq(chat.status, nil)
+
+  require("codecompanion.interactions.chat.omnigent.compaction").cancel(chat)
+end
+
 return T

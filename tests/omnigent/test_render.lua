@@ -97,6 +97,46 @@ T["enrich_usage falls back to the session context window"] = function()
   h.eq(explicit.context_window, 128000)
 end
 
+T["renders a durable compaction item as a boundary marker"] = function()
+  local m = render.durable_item_to_message({
+    type = "compaction",
+    summary = "Refactored the parser.\nAdded tests.",
+    model = "claude-opus-4-8",
+    token_count = 8421,
+    last_item_id = "msg_9",
+  })
+  h.eq(m.role, "llm")
+  h.eq(m.opts.system, true)
+  h.is_true(m.content:find("Context compacted", 1, true) ~= nil)
+  h.is_true(m.content:find("8.4k tokens", 1, true) ~= nil)
+  h.is_true(m.content:find("via claude-opus-4-8", 1, true) ~= nil)
+  -- Multi-line summaries stay inside the callout.
+  h.is_true(m.content:find("> Refactored the parser.", 1, true) ~= nil)
+  h.is_true(m.content:find("> Added tests.", 1, true) ~= nil)
+  -- No longer routed to the unknown-item placeholder.
+  h.eq(m.content:find("Omnigent event", 1, true), nil)
+end
+
+T["renders a compaction item whose payload is nested under data"] = function()
+  local m = render.durable_item_to_message({
+    type = "compaction",
+    data = { summary = "Nested payload.", token_count = 1200 },
+  })
+  h.is_true(m.content:find("Nested payload.", 1, true) ~= nil)
+  h.is_true(m.content:find("1.2k tokens", 1, true) ~= nil)
+end
+
+T["compaction marker degrades without summary or counts"] = function()
+  local bare = render.compaction_marker({})
+  h.is_true(bare:find("Context compacted", 1, true) ~= nil)
+  h.is_true(bare:find("no longer in the", 1, true) ~= nil)
+  -- Nothing to report -> no empty parenthetical.
+  h.eq(bare:find("()", 1, true), nil)
+
+  local small = render.compaction_marker({ total_tokens = 842 })
+  h.is_true(small:find("842 tokens", 1, true) ~= nil)
+end
+
 T["snapshot_messages maps a real /items page"] = function()
   local page = read_json("items-lifecycle.json")
   local msgs = render.snapshot_messages(page.data)

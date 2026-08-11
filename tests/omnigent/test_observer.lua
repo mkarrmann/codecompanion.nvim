@@ -251,4 +251,29 @@ T["a reconcile batch writes one recovered header, not one per item"] = function(
   h.eq(#headers, 1)
 end
 
+T["compaction routes to the compaction module and restores the input anchor"] = function()
+  local obs, chat = new_observer()
+  obs:handle_update({ kind = "compaction_completed", task_id = "c1", total_tokens = 500 })
+
+  local marker = vim.tbl_filter(function(b)
+    return b.content:find("Context compacted", 1, true) ~= nil
+  end, chat.buf_calls)
+  h.eq(#marker, 1)
+  -- Out-of-band buffer writes must leave a usable `## Me` anchor behind.
+  h.eq(chat.input_anchor_resets, 1)
+end
+
+T["compaction is not dropped while the user is composing"] = function()
+  -- Unlike content updates, a terminal compaction event must always land: skipping
+  -- it would strand the progress indicator with nothing to clear it.
+  local obs, chat = new_observer()
+  chat.pending_input = true
+  obs:handle_update({ kind = "compaction_completed", task_id = "c1" })
+
+  local marker = vim.tbl_filter(function(b)
+    return b.content:find("Context compacted", 1, true) ~= nil
+  end, chat.buf_calls)
+  h.eq(#marker, 1)
+end
+
 return T
