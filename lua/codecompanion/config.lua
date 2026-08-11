@@ -522,6 +522,18 @@ If you are providing code changes, use the insert_edit_into_file tool (if availa
             contains_code = false,
           },
         },
+        ["omnigent_compact"] = {
+          path = "interactions.chat.slash_commands.builtin.omnigent_compact",
+          description = "Compact the current Omnigent session's context (server-side)",
+          ---@param opts { adapter: CodeCompanion.HTTPAdapter|CodeCompanion.ACPAdapter }
+          ---@return boolean
+          enabled = function(opts)
+            return opts.adapter and opts.adapter.type == "omnigent" or false
+          end,
+          opts = {
+            contains_code = false,
+          },
+        },
         ["omnigent_children"] = {
           path = "interactions.chat.slash_commands.builtin.omnigent_children",
           description = "List the current Omnigent session's child (sub-agent) sessions",
