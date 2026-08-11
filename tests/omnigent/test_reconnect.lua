@@ -31,10 +31,18 @@ local function setup(connections, opts)
   opts = opts or {}
   local cap = { items = opts.items }
   local factory, jstats = fs.scripted_job(connections)
+  -- One router instance behind both transports: reconcile fetches items
+  -- asynchronously, so a harness that stubbed only `request` would let those
+  -- calls escape to real curl. Completing inline keeps the tests deterministic,
+  -- matching the immediate `defer` below.
+  local route = router(cap)
   local c = client.new({
     url = "http://x",
     hostname = "MacBook-Pro.local",
-    request = router(cap),
+    request = route,
+    async_request = function(o)
+      o.on_complete(route(o))
+    end,
     job = factory,
   })
   local adapter = {
@@ -134,6 +142,129 @@ T["reconcile renders a turn missed during the disconnect (once)"] = function()
   h.eq(#rendered, 1)
   -- The item is now marked seen.
   h.eq(s.seen_items["msg_missed"], true)
+end
+
+T["reconcile does not block: it renders only once the fetch completes"] = function()
+  -- The regression this guards: reconcile used to fetch /items through the SYNC
+  -- transport, so a reconnect against an unresponsive server froze the whole
+  -- editor for the request budget. Hold the response open and assert that
+  -- reconcile returned with nothing rendered -- a blocking implementation could
+  -- not reach that point.
+  local cap = { items = {
+    {
+      id = "msg_slow",
+      type = "message",
+      role = "assistant",
+      response_id = "resp_slow",
+      content = { { type = "output_text", text = "arrived late" } },
+    },
+  } }
+  local route = router(cap)
+  local pending
+  local c = client.new({
+    url = "http://x",
+    hostname = "MacBook-Pro.local",
+    request = route,
+    async_request = function(o)
+      -- Never completes inline: stands in for a server that accepted the
+      -- connection but has not answered yet.
+      pending = function()
+        o.on_complete(route(o))
+      end
+    end,
+    job = fs.scripted_job({ {} }),
+  })
+  local adapter = {
+    type = "omnigent",
+    url = "http://x",
+    defaults = {},
+    opts = { background_updates = true },
+  }
+  local s = session.new({
+    adapter = adapter,
+    client = c,
+    defer = function(fn)
+      fn()
+    end,
+  })
+  s.session_id = "conv_1"
+  local chat = fs.mock_chat(adapter)
+  chat.omnigent_session_id = "conv_1"
+  s:set_observer(Observer.new(chat))
+
+  s:_reconcile()
+  -- Returned while the fetch is still outstanding.
+  h.eq(s._reconciling, true)
+  h.eq(#chat.buf_calls, 0)
+
+  -- A reconnect landing mid-fetch must not start a second pass.
+  s:_reconcile()
+  h.eq(type(pending), "function")
+
+  pending()
+  h.eq(s._reconciling, false)
+  local rendered = vim.tbl_filter(function(b)
+    return b.content and b.content:find("arrived late", 1, true) ~= nil
+  end, chat.buf_calls)
+  h.eq(#rendered, 1)
+end
+
+T["reconcile follows pagination across pages"] = function()
+  -- _list_all_async chains pages via callbacks rather than a loop; a broken
+  -- chain would silently render only the first page.
+  local function msg(id, text)
+    return { id = id, type = "message", role = "assistant", content = { { type = "output_text", text = text } } }
+  end
+  local pages = {
+    { data = { msg("a", "page one") }, has_more = true, last_id = "a" },
+    { data = { msg("b", "page two") }, has_more = false },
+  }
+  local seen_after = {}
+  local n = 0
+  local c = client.new({
+    url = "http://x",
+    hostname = "MacBook-Pro.local",
+    request = function()
+      return { status = 200, body = "{}" }
+    end,
+    async_request = function(o)
+      n = n + 1
+      -- `t[#t+1] = nil` is a no-op in Lua, so record a sentinel for "no cursor".
+      seen_after[#seen_after + 1] = o.url:match("after=([^&]+)") or "<none>"
+      o.on_complete({ status = 200, body = vim.json.encode(pages[n]) })
+    end,
+    job = fs.scripted_job({ {} }),
+  })
+  local adapter = {
+    type = "omnigent",
+    url = "http://x",
+    defaults = {},
+    opts = { background_updates = true },
+  }
+  local s = session.new({
+    adapter = adapter,
+    client = c,
+    defer = function(fn)
+      fn()
+    end,
+  })
+  s.session_id = "conv_1"
+  local chat = fs.mock_chat(adapter)
+  chat.omnigent_session_id = "conv_1"
+  s:set_observer(Observer.new(chat))
+
+  s:_reconcile()
+  h.eq(n, 2)
+  h.eq(seen_after[1], "<none>") -- first page unpaginated
+  h.eq(seen_after[2], "a") -- second page cursors off last_id
+  local text = table.concat(
+    vim.tbl_map(function(b)
+      return b.content or ""
+    end, chat.buf_calls),
+    "\n"
+  )
+  h.eq(text:find("page one", 1, true) ~= nil, true)
+  h.eq(text:find("page two", 1, true) ~= nil, true)
 end
 
 T["reconcile skips items already rendered live (seen_items)"] = function()

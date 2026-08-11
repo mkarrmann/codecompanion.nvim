@@ -687,15 +687,47 @@ end
 ---(completed while disconnected). In-flight text is NOT in /items (stream-first
 ---replay), so this only fills fully-missed, committed turns. Content already
 ---rendered live is skipped via seen_items.
+---
+---Runs ASYNCHRONOUSLY. This fires from the reconnect path, so it happens when
+---the server is least likely to answer -- exactly when a blocking fetch would
+---freeze the editor for the whole request budget. Nothing here needs the items
+---to arrive before returning: every consumer is a side effect on the observer.
+---
+---`reconcile_timeout` is deliberately short. The client default is sized for a
+---turn; a paginated GET issued while a dropped stream is reconnecting should
+---give up quickly and let the next reconnect retry, rather than hold a curl job
+---open across cycles.
 function Session:_reconcile()
   if not self.observer or not self.session_id then
     return
   end
-  local page = self.adapter.opts and self.adapter.opts.history_page_size
-  local items = self.client:list_items(self.session_id, page and { limit = page } or nil)
-  if not items then
+  -- Reconnects coalesce but can still overlap a fetch already in flight. A
+  -- second pass would re-render nothing (seen_items dedups) but would bracket
+  -- the observer with a nested begin/end pair, so drop it.
+  if self._reconciling then
     return
   end
+  local page = self.adapter.opts and self.adapter.opts.history_page_size
+  local timeout = (self.adapter.opts and self.adapter.opts.reconcile_timeout) or 3000
+  self._reconciling = true
+  self.client:list_items_async(
+    self.session_id,
+    page and { limit = page } or nil,
+    { timeout = timeout },
+    function(items, _err)
+      self._reconciling = false
+      if not items or not self.observer or not self.session_id then
+        return
+      end
+      self:_apply_reconciled_items(items)
+    end
+  )
+end
+
+---Render the durable items a reconcile fetched. Split out so the fetch can be
+---async without indenting the whole body into a callback.
+---@param items table[]
+function Session:_apply_reconciled_items(items)
   if self.observer.reconcile_begin then
     self.observer:reconcile_begin()
   end

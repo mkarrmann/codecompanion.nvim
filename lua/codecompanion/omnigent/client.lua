@@ -309,6 +309,51 @@ function Client:_list_all(path, params, max_pages)
   return out
 end
 
+--- Async twin of :_list_all. Chains one page per callback rather than looping,
+--- so no page ever blocks the editor.
+---
+--- `opts.timeout` matters more here than on the sync path: a caller that cannot
+--- block still should not leave a curl job pending for the client default while
+--- reconnect cycles pile up behind it.
+---@param path string
+---@param params? table
+---@param opts? table { max_pages?: integer, timeout?: number }
+---@param callback fun(items: table[]|nil, err: table|nil)
+function Client:_list_all_async(path, params, opts, callback)
+  params = params or {}
+  opts = opts or {}
+  local max_pages = opts.max_pages or 20
+  local out = {}
+
+  local fetch
+  local page = 0
+  fetch = function(after)
+    page = page + 1
+    if page > max_pages then
+      callback(out)
+      return
+    end
+    local q = vim.tbl_extend("force", {}, params)
+    if after then
+      q.after = after
+    end
+    self:request_async("get", path, { query = q, timeout = opts.timeout }, function(body, err)
+      if not body then
+        callback(nil, err)
+        return
+      end
+      vim.list_extend(out, body.data or {})
+      if not body.has_more or not body.last_id then
+        callback(out)
+        return
+      end
+      fetch(body.last_id)
+    end)
+  end
+
+  fetch(nil)
+end
+
 -- ---- REST resource methods -------------------------------------------------
 
 ---@return table[]|nil agents, table|nil err
@@ -379,6 +424,15 @@ end
 ---@return table[]|nil items, table|nil err
 function Client:list_items(session_id, params)
   return self:_list_all("/v1/sessions/" .. session_id .. "/items", params)
+end
+
+---Async twin of :list_items.
+---@param session_id string
+---@param params? table
+---@param opts? table { max_pages?: integer, timeout?: number }
+---@param callback fun(items: table[]|nil, err: table|nil)
+function Client:list_items_async(session_id, params, opts, callback)
+  return self:_list_all_async("/v1/sessions/" .. session_id .. "/items", params, opts, callback)
 end
 
 ---Post an inbound event (message / interrupt / approval / ...).
