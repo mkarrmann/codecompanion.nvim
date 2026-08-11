@@ -860,10 +860,53 @@ function Session:post_message(text)
   return result, err
 end
 
+---Async twin of :post_message, for the foreground submit path.
+---
+---The sync one blocks nvim's main thread for the whole round trip -- up to the
+---client's 30s budget against an unresponsive server -- which is the editor
+---freezing the moment you press send. Nothing about the ORDER of events changes
+---by going async: the stream is opened before this POST either way, and
+---plenary's sync path waits via `vim.wait`, which pumps the event loop, so SSE
+---events already reach the reducer mid-request today. Only the input block goes
+---away.
+---@param text string
+---@param callback? fun(result: table|nil, err: table|nil)
+---@return table|nil request_handle
+function Session:post_message_async(text, callback)
+  return self.client:post_event_async(self.session_id, {
+    type = "message",
+    data = { role = "user", content = { { type = "input_text", text = text } } },
+  }, function(result, err)
+    if result and result.pending_id then
+      self.reducer:expect_input(result.pending_id)
+    end
+    if callback then
+      callback(result, err)
+    end
+  end)
+end
+
 ---Interrupt the active turn (does NOT stop or delete the session).
 ---@return table|nil, table|nil
 function Session:interrupt()
   return self.client:post_event(self.session_id, { type = "interrupt", data = vim.empty_dict() })
+end
+
+---Async twin of :interrupt. Cancelling is fire-and-forget -- the caller already
+---discards the result -- so there is no reason to freeze the editor while the
+---request is in flight, least of all when cancelling a wedged turn.
+---@param callback? fun(result: table|nil, err: table|nil)
+---@return table|nil request_handle
+function Session:interrupt_async(callback)
+  return self.client:post_event_async(
+    self.session_id,
+    { type = "interrupt", data = vim.empty_dict() },
+    function(result, err)
+      if callback then
+        callback(result, err)
+      end
+    end
+  )
 end
 
 ---Whether a turn is currently occupying the session server-side. Compaction is

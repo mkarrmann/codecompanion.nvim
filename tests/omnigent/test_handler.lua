@@ -1,9 +1,9 @@
 local h = require("tests.helpers")
 local new_set = MiniTest.new_set
 
+local OmnigentHandler = require("codecompanion.interactions.chat.omnigent.handler")
 local client = require("codecompanion.omnigent.client")
 local session = require("codecompanion.omnigent.session")
-local OmnigentHandler = require("codecompanion.interactions.chat.omnigent.handler")
 
 -- These tests deliberately exercise error paths (which log:error). Silence that
 -- logging so the suite output stays clean.
@@ -78,7 +78,12 @@ local function fake_chat(adapter, sess)
   }
 end
 
-local ADAPTER = { type = "omnigent", url = "http://x", defaults = { agent = "claude-native-ui", host = "auto", workspace = "auto" }, opts = {} }
+local ADAPTER = {
+  type = "omnigent",
+  url = "http://x",
+  defaults = { agent = "claude-native-ui", host = "auto", workspace = "auto" },
+  opts = {},
+}
 
 local function setup(cap)
   cap.hosts = cap.hosts or MAC
@@ -92,11 +97,108 @@ local function setup(cap)
       end,
     }
   end
-  local c = client.new({ url = "http://x", hostname = "MacBook-Pro.local", request = router(cap), job = cap.job })
+  -- One router behind BOTH transports: submit and cancel post asynchronously, so
+  -- a harness stubbing only `request` would let those escape to real curl and
+  -- record nothing. Completing inline keeps the assertions synchronous.
+  local route = router(cap)
+  local c = client.new({
+    url = "http://x",
+    hostname = "MacBook-Pro.local",
+    request = route,
+    async_request = function(o)
+      o.on_complete(route(o))
+    end,
+    job = cap.job,
+  })
   local sess = session.new({ adapter = ADAPTER, client = c })
   local chat = fake_chat(ADAPTER, sess)
   chat.messages = { { role = "user", content = "say ok", _meta = {} } }
   return chat, OmnigentHandler.new(chat), cap
+end
+
+T["submit does not block: it returns while the POST is still outstanding"] = function()
+  -- The regression this guards: submit posted the user message through the SYNC
+  -- transport, freezing nvim's main thread for the whole round trip -- up to the
+  -- 30s client budget against an unresponsive server. Hold the POST open and
+  -- assert submit still handed back a usable handle.
+  local cap = { hosts = MAC, drive = {} }
+  cap.job = function(o)
+    cap.drive.on_stdout = o.on_stdout
+    cap.drive.on_exit = o.on_exit
+    return { stop = function() end }
+  end
+  local route = router(cap)
+  local pending
+  local c = client.new({
+    url = "http://x",
+    hostname = "MacBook-Pro.local",
+    request = route,
+    async_request = function(o)
+      -- Only the event POST is held; session creation still resolves inline so
+      -- submit can get as far as posting.
+      if o.method == "post" and o.url:find("/events", 1, true) then
+        pending = function()
+          o.on_complete(route(o))
+        end
+        return { stop = function() end }
+      end
+      o.on_complete(route(o))
+    end,
+    job = cap.job,
+  })
+  local sess = session.new({ adapter = ADAPTER, client = c })
+  local chat = fake_chat(ADAPTER, sess)
+  local msg = { role = "user", content = "say ok", _meta = {} }
+  chat.messages = { msg }
+  local handler = OmnigentHandler.new(chat)
+
+  local handle = handler:submit({})
+
+  -- Returned with the POST still in flight.
+  h.eq(type(pending), "function")
+  h.eq(handle.session_id, "conv_1")
+  -- Not yet marked sent: that is the success path, and success has not landed.
+  h.eq(msg._meta.sent, nil)
+
+  pending()
+  h.eq(msg._meta.sent, true)
+end
+
+T["submit failure still frees the chat for a retry"] = function()
+  -- On failure submit used to return nil, leaving chat.current_request unset.
+  -- Async it returns a handle first, so the buffer must be freed by the failure
+  -- callback instead (_complete -> chat:done -> current_request = nil).
+  local cap = { hosts = MAC, drive = {} }
+  cap.job = function(o)
+    cap.drive.on_stdout = o.on_stdout
+    cap.drive.on_exit = o.on_exit
+    return { stop = function() end }
+  end
+  local route = router(cap)
+  local c = client.new({
+    url = "http://x",
+    hostname = "MacBook-Pro.local",
+    request = route,
+    async_request = function(o)
+      if o.method == "post" and o.url:find("/events", 1, true) then
+        o.on_complete({ status = 500, body = vim.json.encode({ error = { message = "boom" } }) })
+        return { stop = function() end }
+      end
+      o.on_complete(route(o))
+    end,
+    job = cap.job,
+  })
+  local sess = session.new({ adapter = ADAPTER, client = c })
+  local chat = fake_chat(ADAPTER, sess)
+  local msg = { role = "user", content = "say ok", _meta = {} }
+  chat.messages = { msg }
+  local handler = OmnigentHandler.new(chat)
+
+  handler:submit({})
+
+  -- The text stays unsent so a retry resends it, and the buffer is free again.
+  h.eq(msg._meta.sent, nil)
+  h.eq(chat.current_request, nil)
 end
 
 T["foreground turn: create -> stream -> post -> render -> complete"] = function()
@@ -116,11 +218,14 @@ T["foreground turn: create -> stream -> post -> render -> complete"] = function(
   cap.drive.on_exit(0)
 
   -- Assistant deltas streamed to the buffer and accumulate to "done.".
-  local streamed = table.concat(vim.tbl_map(function(b)
-    return b.content
-  end, vim.tbl_filter(function(b)
-    return b.type == "llm_msg"
-  end, chat.buf_calls)))
+  local streamed = table.concat(vim.tbl_map(
+    function(b)
+      return b.content
+    end,
+    vim.tbl_filter(function(b)
+      return b.type == "llm_msg"
+    end, chat.buf_calls)
+  ))
   h.eq(streamed, "done.")
 
   -- Request completed exactly once, success, with the accumulated output.
@@ -160,7 +265,7 @@ end
 T["turn failure marks the request errored"] = function()
   local chat, handler, cap = setup({})
   handler:submit({})
-  local failed = 'event: response.failed\n'
+  local failed = "event: response.failed\n"
     .. 'data: {"type":"response.failed","response":{"id":"resp_x","error":{"message":"boom"}}}\n\n'
   cap.drive.on_stdout(failed)
   h.eq(chat.status, "error")
@@ -179,7 +284,19 @@ T["host resolution failure aborts the submit without creating a session"] = func
     cap.drive.on_stdout = o.on_stdout
     return { stop = function() end }
   end
-  local c = client.new({ url = "http://x", hostname = "MacBook-Pro.local", request = router(cap), job = cap.job })
+  -- One router behind BOTH transports: submit and cancel post asynchronously, so
+  -- a harness stubbing only `request` would let those escape to real curl and
+  -- record nothing. Completing inline keeps the assertions synchronous.
+  local route = router(cap)
+  local c = client.new({
+    url = "http://x",
+    hostname = "MacBook-Pro.local",
+    request = route,
+    async_request = function(o)
+      o.on_complete(route(o))
+    end,
+    job = cap.job,
+  })
   local sess = session.new({ adapter = ADAPTER, client = c })
   local chat = fake_chat(ADAPTER, sess)
   chat.messages = { { role = "user", content = "hi", _meta = {} } }
@@ -235,7 +352,7 @@ T["publishes normalized Omnigent lifecycle events with chat context"] = function
 
   handler:submit({})
   cap.drive.on_stdout(
-    'event: response.elicitation_request\n'
+    "event: response.elicitation_request\n"
       .. 'data: {"type":"response.elicitation_request","elicitation_id":"e1","method":"elicitation/create","params":{"message":"ok?"}}\n\n'
   )
   vim.api.nvim_del_augroup_by_id(group)
@@ -330,7 +447,9 @@ T["detaches from the session on completion (no background leak)"] = function()
 
   local before = #chat.buf_calls
   -- A stray background delta after completion must NOT render.
-  cap.drive.on_stdout('event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"ghost"}\n\n')
+  cap.drive.on_stdout(
+    'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"ghost"}\n\n'
+  )
   h.eq(#chat.buf_calls, before)
 end
 
@@ -340,7 +459,19 @@ local function resume_setup()
     cap.drive.on_stdout = o.on_stdout
     return { stop = function() end }
   end
-  local c = client.new({ url = "http://x", hostname = "MacBook-Pro.local", request = router(cap), job = cap.job })
+  -- One router behind BOTH transports: submit and cancel post asynchronously, so
+  -- a harness stubbing only `request` would let those escape to real curl and
+  -- record nothing. Completing inline keeps the assertions synchronous.
+  local route = router(cap)
+  local c = client.new({
+    url = "http://x",
+    hostname = "MacBook-Pro.local",
+    request = route,
+    async_request = function(o)
+      o.on_complete(route(o))
+    end,
+    job = cap.job,
+  })
   local sess = session.new({ adapter = ADAPTER, client = c })
   local chat = fake_chat(ADAPTER, sess)
   chat.omnigent_session_id = "conv_existing" -- resume path
@@ -399,7 +530,7 @@ T["elicitation during a foreground turn is presented and does not complete"] = f
     seen = u
   end
   cap.drive.on_stdout(
-    'event: response.elicitation_request\n'
+    "event: response.elicitation_request\n"
       .. 'data: {"type":"response.elicitation_request","elicitation_id":"e1","method":"elicitation/create","params":{"message":"ok?"}}\n\n'
   )
   elicit.handle = orig

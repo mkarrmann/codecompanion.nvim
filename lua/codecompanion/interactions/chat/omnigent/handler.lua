@@ -304,13 +304,24 @@ function OmnigentHandler:submit(payload)
 
   -- Rewrite on the WIRE only: the transcript keeps what the user actually typed,
   -- matching how the ACP path transforms its payload rather than its history.
-  local res, perr = session:post_message(OmnigentHandler.transform_agent_command(text, agent_command_trigger()))
-  if not res then
-    self:_render_error(perr or "Failed to post message")
-    self:_complete("error") -- fires RequestFinished + chat:done + detaches
-    return nil
-  end
-  self:_mark_sent(marked)
+  -- Posted asynchronously so the editor stays live while the request is in
+  -- flight. The handle below needs nothing from the response -- session_id is
+  -- already known -- and the failure path was always side-effecting
+  -- (_render_error + _complete), so it works just as well from a callback.
+  --
+  -- Returning the handle before the POST resolves is what keeps a second submit
+  -- out: Chat:submit early-returns while chat.current_request is set, and
+  -- _complete -> chat:done() clears it, so a failure still frees the buffer for
+  -- a retry. _mark_sent therefore stays on the success path exactly as before,
+  -- with no window in which the same text could be posted twice.
+  session:post_message_async(OmnigentHandler.transform_agent_command(text, agent_command_trigger()), function(res, perr)
+    if not res then
+      self:_render_error(perr or "Failed to post message")
+      self:_complete("error") -- fires RequestFinished + chat:done + detaches
+      return
+    end
+    self:_mark_sent(marked)
+  end)
 
   return {
     session_id = session.session_id,
@@ -319,7 +330,7 @@ function OmnigentHandler:submit(payload)
     end,
     cancel = function()
       pcall(function()
-        session:interrupt()
+        session:interrupt_async()
       end)
     end,
   }
@@ -446,10 +457,7 @@ function OmnigentHandler:_render_item(u)
     and u.text ~= ""
   then
     table.insert(self.output, u.text)
-    self.chat:add_buf_message(
-      { role = config.constants.LLM_ROLE, content = u.text },
-      { type = MT.LLM_MESSAGE }
-    )
+    self.chat:add_buf_message({ role = config.constants.LLM_ROLE, content = u.text }, { type = MT.LLM_MESSAGE })
   end
   -- Function-call output and resource events are folded or setup-only.
 end

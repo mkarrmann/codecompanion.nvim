@@ -447,6 +447,16 @@ function Client:post_event(session_id, event)
   return self:request("post", "/v1/sessions/" .. session_id .. "/events", { body = event })
 end
 
+---Async twin of :post_event. The sync one stays for callers that consume the
+---response inline (compaction's slash fallback, the live smokes).
+---@param session_id string
+---@param event table
+---@param callback fun(result: table|nil, err: table|nil)
+---@return table|nil request_handle
+function Client:post_event_async(session_id, event, callback)
+  return self:request_async("post", "/v1/sessions/" .. session_id .. "/events", { body = event }, callback)
+end
+
 ---Request explicit context compaction (a `compact` control event).
 ---
 ---ASYNCHRONOUS BY NECESSITY, and the two server paths differ in what the response
