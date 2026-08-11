@@ -524,7 +524,7 @@ If you are providing code changes, use the insert_edit_into_file tool (if availa
         },
         ["omnigent_compact"] = {
           path = "interactions.chat.slash_commands.builtin.omnigent_compact",
-          description = "Compact the current Omnigent session's context (server-side)",
+          description = "Compact the current Omnigent session's context",
           ---@param opts { adapter: CodeCompanion.HTTPAdapter|CodeCompanion.ACPAdapter }
           ---@return boolean
           enabled = function(opts)
