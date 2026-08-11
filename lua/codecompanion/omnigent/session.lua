@@ -858,6 +858,29 @@ function Session:compact(opts, callback)
   return true
 end
 
+---Request compaction by posting the agent's OWN `/compact` slash command as an
+---ordinary user message.
+---
+---The CLI-backed harnesses intercept slash commands out of the input stream and
+---compact their in-process context, which is the only compaction available to an
+---SDK harness (the server refuses those, and the SDK control protocol has no
+---compact verb). It is INVISIBLE to omnigent: no `response.compaction.*` events,
+---no durable compaction item -- the CLI never tells anyone. Callers must therefore
+---treat the turn ending as the completion signal.
+---@return table|nil, table|nil
+function Session:compact_via_slash()
+  if not self.session_id then
+    return nil, { message = "no durable session to compact" }
+  end
+  if self:busy() then
+    return nil, { message = "cannot compact while a turn is running; cancel or wait for it to finish" }
+  end
+  if not self:streaming() then
+    self:start_stream()
+  end
+  return self:post_message("/compact")
+end
+
 ---Patch the session model (model_override).
 ---@param model string
 ---@return boolean, table|nil

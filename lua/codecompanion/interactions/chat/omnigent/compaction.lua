@@ -196,6 +196,88 @@ local function begin_indicator(chat)
   return state
 end
 
+-- Ordered compaction strategies. Both are real, and which one a session supports
+-- depends on its harness, so the default tries them in order rather than making
+-- the caller know:
+--
+--   control_event  POST a `compact` control. The server dispatches by harness:
+--                  terminal-backed agents get `/compact` injected into their pane;
+--                  otherwise it summarises server-side. Reports progress properly
+--                  over SSE, so this is preferred WHERE IT WORKS -- but the server
+--                  refuses (HTTP 4xx) for any harness that declares no
+--                  summarisation model, which is every stock SDK agent.
+--   slash_command  Post the agent's own `/compact` as an ordinary user message and
+--                  let the CLI intercept it. This is the only compaction available
+--                  to an SDK harness, and it is INVISIBLE: no compaction events, no
+--                  durable item (verified -- omnigent's PreCompact detection never
+--                  fires on this path). The turn ending is the only completion
+--                  signal, so the marker records a request, not a confirmation.
+--
+-- Override per-adapter with `opts.compaction_strategies`, e.g. to pin one path if
+-- a future server version changes which of them works.
+local DEFAULT_STRATEGIES = { "control_event", "slash_command" }
+
+---@param chat CodeCompanion.Chat
+---@return string[]
+local function strategies_for(chat)
+  local opts = (chat.adapter and chat.adapter.opts) or {}
+  local s = opts.compaction_strategies
+  if type(s) == "table" and #s > 0 then
+    return s
+  end
+  return DEFAULT_STRATEGIES
+end
+
+---Post the agent's own slash command and wait for the turn to end.
+---@param chat CodeCompanion.Chat
+---@param state table
+---@return boolean ok, table|nil err
+local function run_slash_command(chat, state)
+  local ok, err = chat.omnigent_session:compact_via_slash()
+  if not ok then
+    return false, err
+  end
+  state.strategy = "slash_command"
+  fire(chat, "requested", { strategy = "slash_command" })
+  return true
+end
+
+---Post the server control, falling through to the next strategy on a refusal.
+---@param chat CodeCompanion.Chat
+---@param state table
+---@param on_refused fun()
+---@return boolean ok, table|nil err
+local function run_control_event(chat, state, on_refused)
+  state.strategy = "control_event"
+  local accepted, err = chat.omnigent_session:compact({ timeout = timeout_for(chat) }, function(ok, post_err)
+    if ok then
+      -- Accepted. The terminal SSE event decides the outcome -- for the
+      -- server-side path it has almost certainly already arrived.
+      return
+    end
+    -- Stale: the watchdog gave up, or the chat moved on. Don't re-report.
+    if chat._omnigent_compaction ~= state then
+      return
+    end
+    -- A refusal is terminal for THIS strategy: nothing started, so no SSE will
+    -- follow. Fall through rather than surfacing it -- "this harness has no
+    -- server-side compaction" is a routing fact, not a user-facing failure.
+    local status = type(post_err) == "table" and post_err.status
+    if status and status >= 400 and status < 500 then
+      log:debug("[Omnigent::Compaction] control_event refused (%s); trying the next strategy", tostring(status))
+      return on_refused()
+    end
+    clear_inflight(chat)
+    fire(chat, "failed", { error = post_err, strategy = "control_event" })
+    M.render_failure(chat, post_err, { transcript = false })
+  end)
+  if not accepted then
+    return false, err
+  end
+  fire(chat, "requested", { strategy = "control_event" })
+  return true
+end
+
 ---Request compaction of the chat's durable session.
 ---
 ---Refuses (without side effects) when there is nothing to compact, a turn is in
@@ -219,32 +301,68 @@ function M.request(chat)
   end
 
   local state = begin_indicator(chat)
-  fire(chat, "requested")
+  if not state then
+    return false, { message = "chat buffer is no longer valid" }
+  end
 
-  local accepted, err = session:compact({ timeout = timeout_for(chat) }, function(ok, post_err)
-    if ok then
-      -- Accepted. The terminal event decides the outcome -- for the server-side
-      -- path it has almost certainly already arrived and cleared the indicator.
-      return
-    end
-    -- Stale: the watchdog gave up, or the chat moved on. Don't re-report.
-    if state and chat._omnigent_compaction ~= state then
-      return
-    end
-    -- A rejection here IS terminal: nothing was started, so no SSE will follow.
-    -- Not every harness supports compaction (the server refuses when the agent
-    -- declares no summarisation model), so this is an ordinary, expected outcome
-    -- -- report it as a toast and leave the transcript clean.
-    clear_inflight(chat)
-    fire(chat, "failed", { error = post_err })
-    M.render_failure(chat, post_err, { transcript = false })
-  end)
+  local queue = vim.deepcopy(strategies_for(chat))
+  local last_err
+  local advance
 
-  if not accepted then
+  advance = function()
+    while #queue > 0 do
+      local name = table.remove(queue, 1)
+      local ok, err
+      if name == "control_event" then
+        ok, err = run_control_event(chat, state, function()
+          -- Asynchronous refusal: resume the queue from the callback.
+          if not advance() then
+            clear_inflight(chat)
+            fire(chat, "failed", { error = last_err })
+            M.render_failure(chat, last_err, { transcript = false })
+          end
+        end)
+      elseif name == "slash_command" then
+        ok, err = run_slash_command(chat, state)
+      else
+        log:warn("[Omnigent::Compaction] unknown strategy %q", tostring(name))
+      end
+      if ok then
+        return true
+      end
+      last_err = err or last_err
+    end
+    return false
+  end
+
+  if not advance() then
     clear_inflight(chat)
-    return false, err
+    return false, last_err or { message = "no compaction strategy succeeded" }
   end
   return true
+end
+
+---A turn finished. Only meaningful for the slash_command strategy, whose
+---compaction the server never reports: the CLI swallows the command, emits no
+---assistant text and no compaction event, so the end of the turn it created is
+---the only signal we get.
+---@param chat CodeCompanion.Chat
+function M.note_turn_end(chat)
+  local state = chat._omnigent_compaction
+  if not state or state.strategy ~= "slash_command" then
+    return
+  end
+  clear_inflight(chat)
+  pcall(function()
+    chat:add_buf_message({
+      role = config.constants.LLM_ROLE,
+      content = "\n> [!NOTE] Compaction requested (`/compact`)\n"
+        .. "> Handled inside the agent's own CLI, which reports nothing back — the\n"
+        .. "> context meter above may lag until the next turn.\n",
+    }, { type = chat.MESSAGE_TYPES.SYSTEM_MESSAGE or chat.MESSAGE_TYPES.LLM_MESSAGE })
+  end)
+  fire(chat, "completed", { strategy = "slash_command", observed = false })
+  utils.notify("Omnigent: /compact sent to the agent.", vim.log.levels.INFO)
 end
 
 ---Report a failure. History is untouched either way, so this never writes a

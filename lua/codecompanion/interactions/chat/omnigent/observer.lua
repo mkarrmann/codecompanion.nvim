@@ -276,6 +276,9 @@ function Observer:handle_update(u)
   elseif k == "turn_completed" then
     self:_fire_usage(u.usage)
     self:_finalize()
+    -- The slash_command compaction strategy has no completion event of its own;
+    -- the turn it created ending is the signal.
+    compaction.note_turn_end(self.chat)
   elseif k == "turn_failed" or k == "error" or (k == "status" and u.status == "failed") then
     local msg = type(u.error) == "table" and (u.error.message or vim.inspect(u.error)) or tostring(u.error)
     self.chat:add_buf_message(

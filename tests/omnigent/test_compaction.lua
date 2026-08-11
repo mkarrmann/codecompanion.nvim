@@ -10,13 +10,14 @@ local T = new_set()
 
 ---A chat double with a compactable session stub. `session.calls` records every
 ---dispatched compact request; `session.refuse` makes the session-level guard fire.
-local function new_chat(session_overrides)
-  local chat = fs.mock_chat(ADAPTER)
+local function new_chat(session_overrides, adapter)
+  local chat = fs.mock_chat(adapter or ADAPTER)
   chat.omnigent_session_id = "conv_1"
   chat.omnigent_session = vim.tbl_extend("force", {
     session_id = "conv_1",
     status = "idle",
     calls = {},
+    slash_calls = 0,
     busy = function(self)
       return self.status == "running" or self.status == "waiting"
     end,
@@ -27,8 +28,20 @@ local function new_chat(session_overrides)
       end
       return true
     end,
+    compact_via_slash = function(self)
+      self.slash_calls = self.slash_calls + 1
+      if self.slash_refuse then
+        return nil, { message = self.slash_refuse }
+      end
+      return { queued = true }
+    end,
   }, session_overrides or {})
   return chat
+end
+
+-- Pin a single strategy so a test exercises exactly one path.
+local function only(strategy)
+  return { type = "omnigent", url = "http://x", opts = { compaction_strategies = { strategy } } }
 end
 
 ---Capture CodeCompanionOmnigentCompaction events fired during `fn`.
@@ -108,8 +121,18 @@ T["request refuses a second concurrent compaction"] = function()
   compaction.cancel(chat)
 end
 
-T["a session-level refusal leaves no indicator behind"] = function()
-  local chat = new_chat({ refuse = "no durable session to compact" })
+T["a synchronous refusal advances to the next strategy"] = function()
+  local chat = new_chat({ refuse = "no server-side compaction" })
+  h.eq(compaction.request(chat), true)
+  h.eq(chat.omnigent_session.slash_calls, 1)
+  compaction.cancel(chat)
+end
+
+T["exhausting every strategy leaves no indicator behind"] = function()
+  local chat = new_chat({
+    refuse = "no server-side compaction",
+    slash_refuse = "no durable session to compact",
+  })
   local ok, err = compaction.request(chat)
   h.eq(ok, false)
   h.eq(err.message, "no durable session to compact")
@@ -236,6 +259,77 @@ T["a late completion after cancel still renders"] = function()
 
   compaction.handle_update(chat, { kind = "compaction_completed", task_id = "c1", total_tokens = 42 })
   h.eq(#markers(chat), 1)
+end
+
+T["a 4xx refusal falls through to the slash_command strategy"] = function()
+  -- The stock SDK agents are refused server-side; the fallback is the whole point.
+  local chat = new_chat()
+  local events = capture_events(function()
+    compaction.request(chat)
+    h.eq(#chat.omnigent_session.calls, 1) -- control_event tried first
+    chat.omnigent_session.calls[1].callback(false, { status = 400, message = "/compact is unavailable" })
+  end)
+
+  h.eq(chat.omnigent_session.slash_calls, 1)
+  h.eq(compaction.in_flight(chat), true) -- still pending: waiting for the turn
+  -- The refusal is a routing fact, not a failure the user should see.
+  h.eq(#chat.buf_calls, 0)
+  local phases = vim.tbl_map(function(e) return e.phase end, events)
+  h.eq(phases[#phases], "requested")
+  h.eq(events[#events].strategy, "slash_command")
+
+  compaction.cancel(chat)
+end
+
+T["a 5xx is a real failure, not a fallback"] = function()
+  local chat = new_chat()
+  compaction.request(chat)
+  chat.omnigent_session.calls[1].callback(false, { status = 500, message = "boom" })
+  h.eq(chat.omnigent_session.slash_calls, 0)
+  h.eq(compaction.in_flight(chat), false)
+end
+
+T["slash_command completes when the turn it created ends"] = function()
+  local chat = new_chat(nil, only("slash_command"))
+  local events = capture_events(function()
+    h.eq(compaction.request(chat), true)
+    h.eq(chat.omnigent_session.slash_calls, 1)
+    h.eq(#chat.omnigent_session.calls, 0) -- control path not used
+    h.eq(compaction.in_flight(chat), true)
+    compaction.note_turn_end(chat)
+  end)
+
+  h.eq(compaction.in_flight(chat), false)
+  h.eq(events[#events].phase, "completed")
+  -- Marked as unobserved: the CLI reports nothing, so we must not claim a
+  -- confirmed token count.
+  h.eq(events[#events].observed, false)
+  local note = vim.tbl_filter(function(b)
+    return b.content:find("Compaction requested", 1, true) ~= nil
+  end, chat.buf_calls)
+  h.eq(#note, 1)
+  h.eq(#markers(chat), 0)
+end
+
+T["note_turn_end ignores turns unrelated to compaction"] = function()
+  local chat = new_chat(nil, only("control_event"))
+  compaction.request(chat)
+  compaction.note_turn_end(chat) -- a control_event compaction is SSE-driven
+  h.eq(compaction.in_flight(chat), true)
+  h.eq(#chat.buf_calls, 0)
+  compaction.cancel(chat)
+
+  local idle = new_chat()
+  compaction.note_turn_end(idle) -- nothing in flight at all
+  h.eq(#idle.buf_calls, 0)
+end
+
+T["adapter opts can pin the strategy order"] = function()
+  local chat = new_chat(nil, only("slash_command"))
+  compaction.request(chat)
+  h.eq(#chat.omnigent_session.calls, 0)
+  h.eq(chat.omnigent_session.slash_calls, 1)
+  compaction.cancel(chat)
 end
 
 T["owns() covers exactly the compaction kinds"] = function()
