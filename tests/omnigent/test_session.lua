@@ -551,4 +551,92 @@ T["fork requires a source session id"] = function()
   h.eq(err.code, "session_required")
 end
 
+---A session wired to a recording async transport, ready to compact.
+local function compactable(cap)
+  cap.async = cap.async or {}
+  local c = client.new({
+    url = "http://x",
+    request = router(cap),
+    job = function()
+      cap.streamed = true
+      return { stop = function() end }
+    end,
+    async_request = function(o)
+      cap.async[#cap.async + 1] = o
+      if cap.respond then
+        o.on_complete(cap.respond)
+      end
+      return { stop = function() end }
+    end,
+  })
+  local s = session.new({
+    adapter = { type = "omnigent", url = "http://x", defaults = {}, opts = {} },
+    client = c,
+    callbacks = {},
+  })
+  s.session_id = "conv_1"
+  return s
+end
+
+T["compact posts the control event and opens the stream"] = function()
+  local cap = {}
+  local s = compactable(cap)
+  local accepted = s:compact({ timeout = 120000 })
+  h.eq(accepted, true)
+
+  h.eq(#cap.async, 1)
+  local req = cap.async[1]
+  h.eq(req.method, "post")
+  h.is_true(req.url:find("/v1/sessions/conv_1/events", 1, true) ~= nil)
+  h.eq(vim.json.decode(req.body).type, "compact")
+  -- The per-request override wins over the client default (30s).
+  h.eq(req.timeout, 120000)
+  -- Without a subscription the terminal event would go unheard.
+  h.eq(cap.streamed, true)
+end
+
+T["compact refuses while a turn occupies the session"] = function()
+  local cap = {}
+  local s = compactable(cap)
+  s.status = "running"
+  local accepted, err = s:compact()
+  h.eq(accepted, false)
+  h.is_true(err.message:find("running", 1, true) ~= nil)
+  h.eq(#cap.async, 0)
+end
+
+T["compact refuses without a durable session"] = function()
+  local cap = {}
+  local s = compactable(cap)
+  s.session_id = nil
+  local accepted, err = s:compact()
+  h.eq(accepted, false)
+  h.is_true(err.message:find("no durable session", 1, true) ~= nil)
+  h.eq(#cap.async, 0)
+end
+
+T["compact reports an HTTP rejection to its callback"] = function()
+  local cap = { respond = { status = 409, body = vim.json.encode({
+    error = { code = "conflict", message = "Cannot compact while a turn is running" },
+  }) } }
+  local s = compactable(cap)
+  local got
+  s:compact({}, function(ok, err)
+    got = { ok = ok, err = err }
+  end)
+  h.eq(got.ok, false)
+  h.eq(got.err.status, 409)
+  h.is_true(got.err.message:find("Cannot compact", 1, true) ~= nil)
+end
+
+T["compaction_completed merges into usage without clobbering cost"] = function()
+  local cap = {}
+  local s = compactable(cap)
+  s.usage = { context_tokens = 900000, total_cost_usd = 1.25, by_model = { a = 1 } }
+  s:_apply_state({ kind = "compaction_completed", usage = { context_tokens = 8421 } })
+  h.eq(s.usage.context_tokens, 8421)
+  h.eq(s.usage.total_cost_usd, 1.25)
+  h.eq(s.usage.by_model.a, 1)
+end
+
 return T

@@ -160,7 +160,10 @@ local function request_options(client, method, path, opts)
       ["accept"] = "application/json",
     }, client.headers, opts.headers or {}),
     body = opts.body ~= nil and vim.json.encode(opts.body) or nil,
-    timeout = client.timeout,
+    -- Per-request override for the handful of endpoints whose server-side work is
+    -- unbounded by the usual REST budget (compaction runs a summarisation LLM call
+    -- inline before answering). Everything else keeps the client default.
+    timeout = opts.timeout or client.timeout,
   }
 end
 
@@ -384,6 +387,30 @@ end
 ---@return table|nil result, table|nil err
 function Client:post_event(session_id, event)
   return self:request("post", "/v1/sessions/" .. session_id .. "/events", { body = event })
+end
+
+---Request explicit context compaction (a `compact` control event).
+---
+---ASYNCHRONOUS BY NECESSITY, and the two server paths differ in what the response
+---means:
+---  * runner-backed (claude-native): the server forwards the control to the
+---    runner, which injects `/compact` into the terminal and answers 200 at once.
+---    The compaction itself then happens out-of-band.
+---  * server-side (SDK harnesses): the server runs the whole summarisation inline
+---    and only answers once it has finished -- easily longer than the default REST
+---    timeout, hence the caller-supplied one.
+---In BOTH cases the authoritative outcome is the `response.compaction.completed` /
+---`.failed` SSE event, not this response; a 2xx here only means "accepted".
+---@param session_id string
+---@param opts? table { timeout?: number }
+---@param callback fun(result: table|nil, err: table|nil)
+---@return table|nil request_handle
+function Client:compact_session(session_id, opts, callback)
+  opts = opts or {}
+  return self:request_async("post", "/v1/sessions/" .. session_id .. "/events", {
+    body = { type = "compact", data = vim.empty_dict() },
+    timeout = opts.timeout,
+  }, callback)
 end
 
 ---Resolve an elicitation (accept/decline/cancel).

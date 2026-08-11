@@ -393,6 +393,32 @@ function Reducer:handle(event)
     return { { kind = "elicitation_resolved", elicitation_id = j.elicitation_id } }
   elseif t == "response.policy_denied" then
     return { { kind = "policy_denied", reason = j.reason, phase = j.phase } }
+  elseif t == "response.compaction.in_progress" then
+    -- Context compaction, either explicitly requested (a `compact` control event)
+    -- or self-triggered by the harness on context overflow. It is NOT a turn: it
+    -- opens/closes no response, so the turn accumulators are deliberately left
+    -- alone and an in-flight foreground turn keeps streaming around it.
+    return { { kind = "compaction_started", task_id = j.task_id } }
+  elseif t == "response.compaction.completed" then
+    -- `total_tokens` is the post-compaction context size. Surfacing it as a usage
+    -- table lets the context meter drop immediately instead of showing the
+    -- pre-compaction figure until the next turn reports usage. `summary` /
+    -- `summary_model` are populated only for harness-side compaction; the
+    -- server-side path persists a durable `compaction` item instead.
+    return {
+      {
+        kind = "compaction_completed",
+        task_id = j.task_id,
+        total_tokens = j.total_tokens,
+        summary = j.summary,
+        summary_model = j.summary_model,
+        usage = j.total_tokens and normalize_usage({ total_tokens = j.total_tokens }) or nil,
+      },
+    }
+  elseif t == "response.compaction.failed" then
+    -- History was NOT modified: consumers dismiss any progress indicator without
+    -- leaving a boundary marker behind.
+    return { { kind = "compaction_failed", task_id = j.task_id } }
   end
 
   -- ----- Session-level -----------------------------------------------------

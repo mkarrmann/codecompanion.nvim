@@ -488,4 +488,55 @@ T["model / effort / options updates track state"] = function()
   h.eq(r.reasoning_effort, "high")
 end
 
+T["compaction lifecycle reduces to its own kinds"] = function()
+  local r = events.new()
+
+  local started = r:handle_json({ type = "response.compaction.in_progress", task_id = "compact_1" })
+  h.eq(#started, 1)
+  h.eq(started[1].kind, "compaction_started")
+  h.eq(started[1].task_id, "compact_1")
+
+  local done = r:handle_json({
+    type = "response.compaction.completed",
+    task_id = "compact_1",
+    total_tokens = 8421,
+  })
+  h.eq(#done, 1)
+  h.eq(done[1].kind, "compaction_completed")
+  h.eq(done[1].total_tokens, 8421)
+  -- total_tokens is republished as usage so the context meter can drop at once.
+  h.eq(done[1].usage.context_tokens, 8421)
+
+  local failed = r:handle_json({ type = "response.compaction.failed", task_id = "compact_1" })
+  h.eq(#failed, 1)
+  h.eq(failed[1].kind, "compaction_failed")
+end
+
+T["harness-side compaction carries its summary through"] = function()
+  local r = events.new()
+  local done = r:handle_json({
+    type = "response.compaction.completed",
+    summary = "We refactored the parser.",
+    summary_model = "claude-opus-4-8",
+  })
+  h.eq(done[1].summary, "We refactored the parser.")
+  h.eq(done[1].summary_model, "claude-opus-4-8")
+  -- No token count reported -> no usage update rather than a bogus zero.
+  h.eq(done[1].usage, nil)
+end
+
+T["compaction does not disturb an in-flight turn"] = function()
+  local r = events.new()
+  r:handle_json({ type = "response.created", response = { id = "resp_1", model = "m" } })
+  r:handle_json({ type = "response.output_text.delta", delta = "before " })
+  r:handle_json({ type = "response.compaction.in_progress", task_id = "c1" })
+  r:handle_json({ type = "response.compaction.completed", task_id = "c1", total_tokens = 10 })
+  local d = r:handle_json({ type = "response.output_text.delta", delta = "after" })
+
+  -- The turn is still open and its text accumulator survived intact.
+  h.eq(r.current_response_id, "resp_1")
+  h.eq(d[1].kind, "message_delta")
+  h.eq(d[1].text, "before after")
+end
+
 return T

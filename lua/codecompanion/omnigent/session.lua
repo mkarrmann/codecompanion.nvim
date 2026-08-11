@@ -55,6 +55,9 @@ local lifecycle_kinds = {
   error = true,
   status = true,
   stream_error = true,
+  compaction_started = true,
+  compaction_completed = true,
+  compaction_failed = true,
 }
 
 ---Lowercased leading DNS label.
@@ -509,6 +512,15 @@ function Session:_apply_state(u)
     end
   elseif u.kind == "usage" then
     self.usage = u.usage
+  elseif u.kind == "compaction_completed" then
+    -- MERGE rather than replace: the compaction event reports only the new
+    -- context size, so a wholesale assignment would drop the cost / per-model
+    -- breakdown that `session.usage` carries for update_metadata.
+    if type(u.usage) == "table" and u.usage.context_tokens then
+      local merged = type(self.usage) == "table" and vim.deepcopy(self.usage) or {}
+      merged.context_tokens = u.usage.context_tokens
+      self.usage = merged
+    end
   elseif u.kind == "item_committed" then
     -- Single source of truth for "what durable items have materialised in this
     -- chat" -- populated for BOTH foreground and background updates so a
@@ -807,6 +819,43 @@ end
 ---@return table|nil, table|nil
 function Session:interrupt()
   return self.client:post_event(self.session_id, { type = "interrupt", data = vim.empty_dict() })
+end
+
+---Whether a turn is currently occupying the session server-side. Compaction is
+---refused in this state (the server raises CONFLICT); checking locally first
+---turns a round-trip + stack trace into an immediate, readable message.
+---@return boolean
+function Session:busy()
+  return self.status == "running" or self.status == "waiting"
+end
+
+---Request explicit context compaction of the durable session.
+---
+---Fires the request and returns; the outcome arrives on the SSE stream as
+---`compaction_completed` / `compaction_failed` (see the client method for why the
+---HTTP response is only an acknowledgement). The stream is opened first when it
+---isn't already running -- without a subscription the terminal event would be
+---published to nobody and the caller would wait forever.
+---@param opts? table { timeout?: number }
+---@param callback fun(ok: boolean, err: table|nil) Invoked on the HTTP outcome only
+---@return boolean accepted, table|nil err Whether the request was dispatched at all
+function Session:compact(opts, callback)
+  opts = opts or {}
+  if not self.session_id then
+    return false, { message = "no durable session to compact" }
+  end
+  if self:busy() then
+    return false, { message = "cannot compact while a turn is running; cancel or wait for it to finish" }
+  end
+  if not self:streaming() then
+    self:start_stream()
+  end
+  self.client:compact_session(self.session_id, { timeout = opts.timeout }, function(_, err)
+    if callback then
+      callback(err == nil, err)
+    end
+  end)
+  return true
 end
 
 ---Patch the session model (model_override).
