@@ -1,10 +1,10 @@
 local h = require("tests.helpers")
 local new_set = MiniTest.new_set
 
-local client = require("codecompanion.omnigent.client")
-local session = require("codecompanion.omnigent.session")
 local Observer = require("codecompanion.interactions.chat.omnigent.observer")
+local client = require("codecompanion.omnigent.client")
 local fs = require("tests.omnigent.fake_server")
+local session = require("codecompanion.omnigent.session")
 
 local T = new_set()
 

@@ -181,13 +181,14 @@ function Session:resolve_targets(opts)
       if host and is_local(host, self.client.hostname) then
         workspace = vim.fn.getcwd()
       else
-        return nil, {
-          message = "workspace='auto' but host '"
-            .. (host and host.name or tostring(host_id))
-            .. "' is not this machine; set an explicit workspace",
-          code = "workspace_required",
-          action = "Configure an explicit workspace path for the remote host.",
-        }
+        return nil,
+          {
+            message = "workspace='auto' but host '"
+              .. (host and host.name or tostring(host_id))
+              .. "' is not this machine; set an explicit workspace",
+            code = "workspace_required",
+            action = "Configure an explicit workspace path for the remote host.",
+          }
       end
     else
       workspace = nil -- headless: no workspace
@@ -409,10 +410,11 @@ function Session.fork(client, source, opts)
   -- a headless (host_id=nil) source runs server-local and needs no launch.
   if source.host_id then
     if not source.workspace then
-      return nil, {
-        message = "source session has a host but no workspace; cannot launch the fork's runner",
-        code = "workspace_required",
-      }
+      return nil,
+        {
+          message = "source session has a host but no workspace; cannot launch the fork's runner",
+          code = "workspace_required",
+        }
     end
     -- base_branch=nil tells the server to branch from the source repo's current
     -- HEAD (see SessionGitOptions) -- exactly what a fork wants by default.

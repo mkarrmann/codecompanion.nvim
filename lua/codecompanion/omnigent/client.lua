@@ -210,7 +210,10 @@ normalize_error = function(status, decoded, raw)
   local msg
   if decoded then
     local e = decoded.error
-    msg = (type(e) == "table" and (e.message or e.detail)) or (type(e) == "string" and e) or decoded.message or decoded.detail
+    msg = (type(e) == "table" and (e.message or e.detail))
+      or (type(e) == "string" and e)
+      or decoded.message
+      or decoded.detail
   end
   msg = msg or raw or ("HTTP " .. tostring(status))
   local action
@@ -242,11 +245,12 @@ function Client:request(method, path, opts)
   opts = opts or {}
   local ok, resp = pcall(self._request, request_options(self, method, path, opts))
   if not ok or type(resp) ~= "table" then
-    return nil, {
-      message = "request failed: " .. tostring(resp),
-      retryable = true,
-      action = "Is the omnigent server reachable at " .. self.url .. "?",
-    }
+    return nil,
+      {
+        message = "request failed: " .. tostring(resp),
+        retryable = true,
+        action = "Is the omnigent server reachable at " .. self.url .. "?",
+      }
   end
 
   return decode_response(resp)
@@ -635,18 +639,20 @@ function Client:resolve_host(spec, opts)
       return online_named[1].host_id
     elseif #named == 1 then
       -- Single match but offline: refuse (don't run on a dead host).
-      return nil, {
-        message = "Host '" .. spec .. "' is not online",
-        code = "host_offline",
-        action = "Bring the host online or pick another.",
-      }
+      return nil,
+        {
+          message = "Host '" .. spec .. "' is not online",
+          code = "host_offline",
+          action = "Bring the host online or pick another.",
+        }
     elseif #named == 0 then
       return nil, { message = "No omnigent host matches '" .. spec .. "'", code = "host_not_found" }
     end
-    return nil, {
-      message = "Multiple hosts match '" .. spec .. "'; specify a host id",
-      code = "host_ambiguous",
-    }
+    return nil,
+      {
+        message = "Multiple hosts match '" .. spec .. "'; specify a host id",
+        code = "host_ambiguous",
+      }
   end
 
   -- spec == "auto": match this machine's FQDN, fail closed on ambiguity.
@@ -660,17 +666,19 @@ function Client:resolve_host(spec, opts)
   if #candidates == 1 then
     return candidates[1].host_id
   elseif #candidates == 0 then
-    return nil, {
-      message = "Could not resolve this machine ('" .. fqdn .. "') to an online omnigent host",
-      code = "host_unresolved",
-      action = "Register this host with omnigent, or set an explicit host in the adapter config.",
-    }
+    return nil,
+      {
+        message = "Could not resolve this machine ('" .. fqdn .. "') to an online omnigent host",
+        code = "host_unresolved",
+        action = "Register this host with omnigent, or set an explicit host in the adapter config.",
+      }
   end
-  return nil, {
-    message = "'" .. fqdn .. "' matches " .. #candidates .. " online hosts; set an explicit host id",
-    code = "host_ambiguous",
-    action = "Refusing to guess -- pick a host id to avoid running on the wrong machine.",
-  }
+  return nil,
+    {
+      message = "'" .. fqdn .. "' matches " .. #candidates .. " online hosts; set an explicit host id",
+      code = "host_ambiguous",
+      action = "Refusing to guess -- pick a host id to avoid running on the wrong machine.",
+    }
 end
 
 -- ---- Streaming ------------------------------------------------------------
