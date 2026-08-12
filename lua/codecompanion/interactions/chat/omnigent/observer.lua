@@ -145,16 +145,6 @@ function Observer:_restore_input()
   end
 end
 
----Does this text look like an omnigent-injected system message (sub-agent / inbox
----plumbing) rather than a real user turn? These arrive as role="user" items but
----must NOT be rendered as `## Me` sections (they pollute the input buffer and make
----`has_user_messages` true, defeating submit's "no messages" guard).
----@param text any
----@return boolean
-local function is_system_injected(text)
-  return type(text) == "string" and text:match("^%s*%[System:") ~= nil
-end
-
 ---Handle one normalised session update (only called when no foreground is bound).
 ---@param u CodeCompanion.Omnigent.Update
 function Observer:handle_update(u)
@@ -212,13 +202,19 @@ function Observer:handle_update(u)
     -- Externally-injected USER messages (driven from another client) should
     -- appear so the transcript stays coherent. Assistant text is already covered
     -- by the streamed deltas; tool calls get a compact marker.
-    if u.item_type == "message" and u.role == "user" and type(u.text) == "string" and u.text ~= "" then
-      if is_system_injected(u.text) then
+    local render = require("codecompanion.interactions.chat.omnigent.render")
+    if
+      u.item_type == "message"
+      and u.role == "user"
+      and type(u.text) == "string"
+      and u.text ~= ""
+      and not render.consume_local_user_echo(self.chat, u.text)
+    then
+      if render.is_system_injected(u.text) then
         -- Omnigent plumbing (sub-agent/inbox notifications): show a compact note,
         -- never a `## Me` turn or a transcript user message.
-        local note = vim.trim(u.text):gsub("%s+", " "):sub(1, 200)
         self.chat:add_buf_message(
-          { role = C.LLM_ROLE, content = "\n> _" .. note .. "_\n" },
+          { role = C.LLM_ROLE, content = render.system_injection_note(u.text) },
           { type = MT.SYSTEM_MESSAGE or MT.LLM_MESSAGE }
         )
       else
@@ -228,7 +224,6 @@ function Observer:handle_update(u)
         end
       end
     elseif u.item_type == "function_call" then
-      local render = require("codecompanion.interactions.chat.omnigent.render")
       local item = u.item or { name = u.tool_name }
       local line_number = self.chat:add_buf_message(
         { role = C.LLM_ROLE, content = render.tool_call_line(item) },

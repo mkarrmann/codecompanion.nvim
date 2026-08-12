@@ -379,8 +379,14 @@ function OmnigentHandler:submit(payload)
     -- matching how the ACP path transforms its payload rather than its history.
     -- _mark_sent stays on the success path, so a failure leaves the text unsent
     -- and a retry resends it exactly once.
+    local wire = OmnigentHandler.transform_agent_command(text, agent_command_trigger())
+    -- The chat buffer already shows this as `## Me`. A native harness mirrors
+    -- typed input back as a user output item, so suppress that echo (both forms:
+    -- the mirror carries what the agent received, not what was typed).
+    render.note_local_user_echo(chat, text, wire)
+
     self._post = session:post_message_async(
-      OmnigentHandler.transform_agent_command(text, agent_command_trigger()),
+      wire,
       function(res, perr)
         if not res then
           self:_render_error(perr or "Failed to post message")
@@ -511,6 +517,36 @@ function OmnigentHandler:_render_item(u)
       call_id = u.call_id or item.call_id,
       output = item.output,
     })
+  elseif
+    u.item_type == "message"
+    and u.role == "user"
+    and type(u.text) == "string"
+    and u.text ~= ""
+    and not render.consume_local_user_echo(self.chat, u.text)
+  then
+    -- A user message committed *during* our turn: someone steered. That is this
+    -- client posting mid-turn, another client posting into the same session, or
+    -- omnigent's own inbox plumbing.
+    --
+    -- The observer renders these for background turns; without the same branch
+    -- here they were silently dropped whenever a foreground turn owned the
+    -- stream, which is the common case (the handler is bound for the whole turn
+    -- it started). Deliberately NOT appended to `self.output`: that accumulates
+    -- the assistant text handed to chat:done().
+    if render.is_system_injected(u.text) then
+      self.chat:add_buf_message(
+        { role = config.constants.LLM_ROLE, content = render.system_injection_note(u.text) },
+        { type = MT.SYSTEM_MESSAGE or MT.LLM_MESSAGE }
+      )
+    else
+      self.chat:add_buf_message({ role = config.constants.USER_ROLE, content = u.text }, { type = MT.USER_MESSAGE })
+      if self.chat.add_message then
+        self.chat:add_message({ role = config.constants.USER_ROLE, content = u.text }, { _meta = { sent = true } })
+      end
+      -- Interleaving is handled for us: Builder:_should_add_header fires on any
+      -- role change, so the assistant deltas that resume after this block get a
+      -- fresh `## <LLM>` header without the handler tracking anything.
+    end
   elseif
     u.item_type == "message"
     and u.role == "assistant"

@@ -30,6 +30,67 @@ function M.item_text(item)
   return table.concat(parts, "")
 end
 
+---Does this text look like an omnigent-injected system message (sub-agent / inbox
+---plumbing) rather than a real user turn? These arrive as role="user" items but
+---must NOT be rendered as `## Me` sections (they pollute the input buffer and make
+---`has_user_messages` true, defeating submit's "no messages" guard).
+---
+---Shared by both render paths: the observer (background turns) and the handler
+---(a message injected into a foreground turn, i.e. steering).
+---@param text any
+---@return boolean
+function M.is_system_injected(text)
+  return type(text) == "string" and text:match("^%s*%[System:") ~= nil
+end
+
+---A `[System: ...]` injection collapsed to one quoted line.
+---@param text string
+---@return string
+function M.system_injection_note(text)
+  return "\n> _" .. vim.trim(text):gsub("%s+", " "):sub(1, 200) .. "_\n"
+end
+
+---Remember a user message this client has already written into the chat buffer.
+---
+---A native harness mirrors typed input back as a response output item, which
+---arrives as an `item_committed` with role="user". Without this the mirror would
+---render a second `## Me` for a message the client had already shown. Matching is
+---by text and consumed once, because that is all the mirror carries in common
+---with what we posted (ids differ, and `pending_id` is native-only).
+---@param chat table
+---@param ... string texts to suppress (raw and wire-transformed may differ)
+function M.note_local_user_echo(chat, ...)
+  if not chat then
+    return
+  end
+  chat.omnigent_local_user_echo = chat.omnigent_local_user_echo or {}
+  local seen = chat.omnigent_local_user_echo
+  -- One note per DISTINCT text: the raw and wire-transformed forms are equal
+  -- whenever no rewrite applied, and counting that twice would swallow a later,
+  -- genuinely repeated user message.
+  local noted = {}
+  for _, text in ipairs({ ... }) do
+    if type(text) == "string" and text ~= "" and not noted[text] then
+      noted[text] = true
+      seen[text] = (seen[text] or 0) + 1
+    end
+  end
+end
+
+---Was `text` already rendered locally? Consumes the note, so a genuinely repeated
+---user message still renders the second time.
+---@param chat table
+---@param text any
+---@return boolean
+function M.consume_local_user_echo(chat, text)
+  local seen = chat and chat.omnigent_local_user_echo
+  if not (seen and type(text) == "string" and seen[text]) then
+    return false
+  end
+  seen[text] = seen[text] > 1 and (seen[text] - 1) or nil
+  return true
+end
+
 ---Compact placeholder for a durable item type CodeCompanion doesn't render richly.
 ---@param item_type string
 ---@return string

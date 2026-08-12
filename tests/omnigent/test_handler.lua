@@ -58,7 +58,7 @@ local function fake_chat(adapter, sess)
     done_call = nil,
     current_request = nil,
     add_buf_message = function(self, msg, opts)
-      table.insert(self.buf_calls, { content = msg.content, type = opts and opts.type })
+      table.insert(self.buf_calls, { content = msg.content, type = opts and opts.type, role = msg.role })
       return #self.buf_calls
     end,
     add_message = function(self, msg, opts)
@@ -325,6 +325,84 @@ T["committed-only native assistant messages render without duplicating streamed 
     text_streamed = true,
   })
   h.eq(#chat.buf_calls, before)
+end
+
+-- Steering: a user message committed while OUR foreground turn owns the stream.
+-- The observer has always rendered these for background turns; the handler
+-- dropped them, so anything posted mid-turn (our own steer, another client, the
+-- inbox) vanished from the transcript.
+T["a user message committed mid-turn renders as a user block"] = function()
+  local chat, handler = setup({})
+  handler:_render_item({ item_type = "message", role = "user", text = "actually, use tabs" })
+
+  local last = chat.buf_calls[#chat.buf_calls]
+  h.eq(last.content, "actually, use tabs")
+  h.eq(last.type, "user_msg")
+  h.eq(last.role, require("codecompanion.config").constants.USER_ROLE)
+
+  -- Also lands in the message history, marked as already sent.
+  h.eq(chat.messages[#chat.messages].content, "actually, use tabs")
+  h.eq(chat.messages[#chat.messages]._meta.sent, true)
+
+  -- Must NOT pollute the assistant output handed to chat:done().
+  h.eq(table.concat(handler.output), "")
+end
+
+T["a mid-turn [System:] injection renders as a note, not a user turn"] = function()
+  local chat, handler = setup({})
+  local before_msgs = #chat.messages
+  handler:_render_item({
+    item_type = "message",
+    role = "user",
+    text = "[System: sub-agent finished]",
+  })
+
+  local last = chat.buf_calls[#chat.buf_calls]
+  h.eq(last.type, "sys_msg")
+  h.is_true(last.content:find("sub-agent finished", 1, true) ~= nil)
+  -- Never a `## Me` section, and never a transcript user message: it would make
+  -- has_user_messages true and defeat submit's "no messages" guard.
+  h.eq(#chat.messages, before_msgs)
+end
+
+T["an empty mid-turn user message is ignored"] = function()
+  local chat, handler = setup({})
+  local before = #chat.buf_calls
+  handler:_render_item({ item_type = "message", role = "user", text = "" })
+  h.eq(#chat.buf_calls, before)
+end
+
+T["a steered message interleaves without swallowing the assistant stream"] = function()
+  local chat, handler = setup({})
+  handler:on_update({ kind = "message_delta", delta = "thinking" })
+  handler:_render_item({ item_type = "message", role = "user", text = "wait, stop" })
+  handler:on_update({ kind = "message_delta", delta = " again" })
+
+  local C = require("codecompanion.config").constants
+  local roles = vim.tbl_map(function(b)
+    return b.role
+  end, chat.buf_calls)
+  h.eq(roles, { C.LLM_ROLE, C.USER_ROLE, C.LLM_ROLE })
+  -- The role flip is what makes Builder:_should_add_header emit a fresh
+  -- `## <LLM>` header for the resumed stream.
+  h.eq(table.concat(handler.output), "thinking again")
+end
+
+-- A native harness mirrors typed input back as a user output item. The chat
+-- already rendered that message when it was submitted, so the mirror must not
+-- produce a second `## Me`.
+T["a mirrored echo of our own submit is not rendered twice"] = function()
+  local chat, handler, cap = setup({})
+  handler:submit({})
+  h.eq(vim.json.decode(cap.event.body).data.content[1].text, "say ok")
+
+  local before = #chat.buf_calls
+  handler:_render_item({ item_type = "message", role = "user", text = "say ok" })
+  h.eq(#chat.buf_calls, before)
+
+  -- Consumed once only: genuinely saying the same thing again does render.
+  handler:_render_item({ item_type = "message", role = "user", text = "say ok" })
+  h.eq(chat.buf_calls[#chat.buf_calls].type, "user_msg")
 end
 
 T["cancel posts an interrupt"] = function()
