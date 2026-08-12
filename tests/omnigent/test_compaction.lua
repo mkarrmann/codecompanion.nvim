@@ -28,12 +28,15 @@ local function new_chat(session_overrides, adapter)
       end
       return true
     end,
-    compact_via_slash = function(self)
+    -- Shaped like `compact`: local preconditions refuse synchronously, the POST
+    -- outcome arrives on the callback.
+    compact_via_slash_async = function(self, callback)
       self.slash_calls = self.slash_calls + 1
+      self.slash_callback = callback
       if self.slash_refuse then
-        return nil, { message = self.slash_refuse }
+        return false, { message = self.slash_refuse }
       end
-      return { queued = true }
+      return true
     end,
   }, session_overrides or {})
   return chat
@@ -309,6 +312,34 @@ T["slash_command completes when the turn it created ends"] = function()
   end, chat.buf_calls)
   h.eq(#note, 1)
   h.eq(#markers(chat), 0)
+end
+
+T["a slash_command POST that fails later clears the indicator"] = function()
+  -- The POST is asynchronous now, so "dispatched" and "delivered" are separate
+  -- outcomes: a later failure must retire the indicator rather than leave the
+  -- chat spinning until the watchdog gives up.
+  local chat = new_chat(nil, only("slash_command"))
+  local events = capture_events(function()
+    h.eq(compaction.request(chat), true)
+    h.eq(compaction.in_flight(chat), true)
+    chat.omnigent_session.slash_callback(false, { status = 503, message = "runner gone" })
+  end)
+
+  h.eq(compaction.in_flight(chat), false)
+  h.eq(events[#events].phase, "failed")
+  h.eq(events[#events].strategy, "slash_command")
+  -- A dispatch failure compacted nothing, so history gets no marker or note.
+  h.eq(#markers(chat), 0)
+  h.eq(#chat.buf_calls, 0)
+end
+
+T["a stale slash_command failure is not re-reported"] = function()
+  local chat = new_chat(nil, only("slash_command"))
+  compaction.request(chat)
+  local callback = chat.omnigent_session.slash_callback
+  compaction.cancel(chat) -- the chat moved on
+  callback(false, { status = 503, message = "runner gone" })
+  h.eq(#chat.buf_calls, 0)
 end
 
 T["note_turn_end ignores turns unrelated to compaction"] = function()

@@ -229,15 +229,32 @@ local function strategies_for(chat)
 end
 
 ---Post the agent's own slash command and wait for the turn to end.
+---
+---The refusals it can answer with are LOCAL preconditions (no session, turn in
+---flight), so the strategy queue still gets an immediate answer; only the POST
+---itself is asynchronous, and its failure is reported the same way the control
+---event's is. This is the last strategy, so there is nothing to fall through to.
 ---@param chat CodeCompanion.Chat
 ---@param state table
 ---@return boolean ok, table|nil err
 local function run_slash_command(chat, state)
-  local ok, err = chat.omnigent_session:compact_via_slash()
-  if not ok then
+  state.strategy = "slash_command"
+  local accepted, err = chat.omnigent_session:compact_via_slash_async(function(ok, post_err)
+    if ok then
+      -- Posted. The turn ending is the completion signal (see M.note_turn_end).
+      return
+    end
+    -- Stale: the watchdog gave up, or the chat moved on. Don't re-report.
+    if chat._omnigent_compaction ~= state then
+      return
+    end
+    clear_inflight(chat)
+    fire(chat, "failed", { error = post_err, strategy = "slash_command" })
+    M.render_failure(chat, post_err, { transcript = false })
+  end)
+  if not accepted then
     return false, err
   end
-  state.strategy = "slash_command"
   fire(chat, "requested", { strategy = "slash_command" })
   return true
 end
