@@ -385,17 +385,14 @@ function OmnigentHandler:submit(payload)
     -- the mirror carries what the agent received, not what was typed).
     render.note_local_user_echo(chat, text, wire)
 
-    self._post = session:post_message_async(
-      wire,
-      function(res, perr)
-        if not res then
-          self:_render_error(perr or "Failed to post message")
-          self:_complete("error") -- fires RequestFinished + chat:done + detaches
-          return
-        end
-        self:_mark_sent(marked)
+    self._post = session:post_message_async(wire, function(res, perr)
+      if not res then
+        self:_render_error(perr or "Failed to post message")
+        self:_complete("error") -- fires RequestFinished + chat:done + detaches
+        return
       end
-    )
+      self:_mark_sent(marked)
+    end)
   end)
 
   if self._settled then
@@ -539,13 +536,18 @@ function OmnigentHandler:_render_item(u)
         { type = MT.SYSTEM_MESSAGE or MT.LLM_MESSAGE }
       )
     else
-      self.chat:add_buf_message({ role = config.constants.USER_ROLE, content = u.text }, { type = MT.USER_MESSAGE })
+      self.chat:add_buf_message(
+        { role = config.constants.USER_ROLE, content = u.text },
+        { type = MT.USER_MESSAGE, force_role = true }
+      )
       if self.chat.add_message then
         self.chat:add_message({ role = config.constants.USER_ROLE, content = u.text }, { _meta = { sent = true } })
       end
-      -- Interleaving is handled for us: Builder:_should_add_header fires on any
-      -- role change, so the assistant deltas that resume after this block get a
-      -- fresh `## <LLM>` header without the handler tracking anything.
+      -- Resuming assistant deltas get their own `## <LLM>` header for free:
+      -- Builder:_should_add_header fires on a role change. Coming IN needs
+      -- force_role though -- a steer lands while the last role is still `user`
+      -- (our own submit), and a role change is the only other thing that emits
+      -- a header, so it would otherwise be appended to that message.
     end
   elseif
     u.item_type == "message"
@@ -598,24 +600,43 @@ function OmnigentHandler.steer(chat, text)
   local MT = chat.MESSAGE_TYPES
   local wire = OmnigentHandler.transform_agent_command(text, agent_command_trigger())
 
-  -- Render before posting so the message is in the transcript even if the POST
-  -- fails (the error lands right below it, in context).
-  chat:add_buf_message({ role = C.USER_ROLE, content = text }, { type = MT.USER_MESSAGE })
-  if chat.add_message then
-    chat:add_message({ role = C.USER_ROLE, content = text }, { _meta = { sent = true } })
-  end
-  render.note_local_user_echo(chat, text, wire)
-
-  session:post_message_async(wire, function(res, perr)
-    if not res then
-      local msg = type(perr) == "table" and (perr.message or vim.inspect(perr)) or tostring(perr)
-      log:error("[Omnigent::Handler] steer failed: %s", msg)
-      chat:add_buf_message(
-        { role = C.LLM_ROLE, content = "\n> [!WARNING] Steer failed: " .. msg .. "\n" },
-        { type = MT.SYSTEM_MESSAGE or MT.LLM_MESSAGE }
-      )
+  local function post(reason)
+    -- force_role because the line above this is almost always the user's own
+    -- submit, and `Builder:_should_add_header` only emits a header on a role
+    -- CHANGE -- so without it a steer is written into that same `## Me` block
+    -- and reads as an edit of the previous message rather than a new one.
+    chat:add_buf_message({ role = C.USER_ROLE, content = text }, { type = MT.USER_MESSAGE, force_role = true })
+    if chat.add_message then
+      chat:add_message({ role = C.USER_ROLE, content = text }, { _meta = { sent = true } })
     end
-  end)
+    render.note_local_user_echo(chat, text, wire)
+
+    if reason == "timeout" or reason == "turn_ended" then
+      log:warn("[Omnigent::Handler] steering without a running turn to steer (%s)", reason)
+    end
+
+    session:post_message_async(wire, function(res, perr)
+      if not res then
+        local msg = type(perr) == "table" and (perr.message or vim.inspect(perr)) or tostring(perr)
+        log:error("[Omnigent::Handler] steer failed: %s", msg)
+        chat:add_buf_message(
+          { role = C.LLM_ROLE, content = "\n> [!WARNING] Steer failed: " .. msg .. "\n" },
+          { type = MT.SYSTEM_MESSAGE or MT.LLM_MESSAGE }
+        )
+      end
+    end)
+  end
+
+  -- Hold until the previous message has actually been picked up by the runner.
+  -- Posting into an un-consumed pending input does not steer -- the server
+  -- hands the runner one combined input and the agent never sees two messages.
+  -- Renders at post time, not now, so a message in the transcript always means
+  -- the agent received it.
+  if session.when_input_ready then
+    session:when_input_ready(post)
+  else
+    post("ready")
+  end
   return true
 end
 

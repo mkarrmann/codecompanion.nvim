@@ -218,7 +218,13 @@ function Observer:handle_update(u)
           { type = MT.SYSTEM_MESSAGE or MT.LLM_MESSAGE }
         )
       else
-        self.chat:add_buf_message({ role = C.USER_ROLE, content = u.text }, { type = MT.USER_MESSAGE })
+        -- force_role: a header is otherwise only emitted on a role CHANGE, so a
+        -- user message arriving while the last role is already `user` would be
+        -- appended into that block instead of opening its own.
+        self.chat:add_buf_message(
+          { role = C.USER_ROLE, content = u.text },
+          { type = MT.USER_MESSAGE, force_role = true }
+        )
         if self.chat.add_message then
           self.chat:add_message({ role = C.USER_ROLE, content = u.text }, { _meta = { sent = true } })
         end
@@ -249,11 +255,7 @@ function Observer:handle_update(u)
     end
   elseif k == "elicitation" then
     -- A background turn is waiting on approval; present it (we are the authority).
-    require("codecompanion.interactions.chat.omnigent.elicitation").handle(
-      self.chat,
-      self.chat.omnigent_session,
-      u
-    )
+    require("codecompanion.interactions.chat.omnigent.elicitation").handle(self.chat, self.chat.omnigent_session, u)
   elseif k == "child_session" or k == "child_session_created" then
     local render = require("codecompanion.interactions.chat.omnigent.render")
     self.chat:add_buf_message(
