@@ -141,26 +141,16 @@ function Session:set_observer(observer)
   self.observer = observer
 end
 
----Resolve agent / host / workspace for a new session. FAIL-CLOSED.
----@param opts? table { agent?, host?, workspace?, agents?, hosts?, labels? }
+---Apply the host + workspace policy once the agent and the host list are known.
+---Pure (no I/O). Shared by both resolve_targets variants so the FAIL-CLOSED rules
+---have exactly one definition.
+---@param opts table
+---@param agent_id string
+---@param hosts table[]
 ---@return table|nil targets { agent_id, host_id?, workspace? }
 ---@return table|nil err
-function Session:resolve_targets(opts)
-  opts = opts or {}
+function Session:_bind_targets(opts, agent_id, hosts)
   local d = self.adapter.defaults or {}
-
-  local agent_id, err = self.client:resolve_agent(opts.agent or d.agent, { agents = opts.agents })
-  if not agent_id then
-    return nil, err
-  end
-
-  local hosts = opts.hosts
-  if not hosts then
-    hosts, err = self.client:list_hosts()
-    if not hosts then
-      return nil, err
-    end
-  end
 
   local host_spec = opts.host or d.host or "auto"
   local host_id
@@ -196,6 +186,67 @@ function Session:resolve_targets(opts)
   end
 
   return { agent_id = agent_id, host_id = host_id, workspace = workspace }
+end
+
+---Resolve agent / host / workspace for a new session. FAIL-CLOSED.
+---@param opts? table { agent?, host?, workspace?, agents?, hosts?, labels? }
+---@return table|nil targets { agent_id, host_id?, workspace? }
+---@return table|nil err
+function Session:resolve_targets(opts)
+  opts = opts or {}
+  local d = self.adapter.defaults or {}
+
+  local agent_id, err = self.client:resolve_agent(opts.agent or d.agent, { agents = opts.agents })
+  if not agent_id then
+    return nil, err
+  end
+
+  local hosts = opts.hosts
+  if not hosts then
+    hosts, err = self.client:list_hosts()
+    if not hosts then
+      return nil, err
+    end
+  end
+
+  return self:_bind_targets(opts, agent_id, hosts)
+end
+
+---Async twin of :resolve_targets. The two fetches stay SEQUENTIAL rather than
+---racing, so an unresolvable agent still reports before an unresolvable host --
+---the same error precedence the sync path has always had.
+---@param opts? table { agent?, host?, workspace?, agents?, hosts?, labels? }
+---@param callback fun(targets: table|nil, err: table|nil)
+function Session:resolve_targets_async(opts, callback)
+  opts = opts or {}
+  local d = self.adapter.defaults or {}
+
+  local function with_agent(agent_id)
+    if opts.hosts then
+      return callback(self:_bind_targets(opts, agent_id, opts.hosts))
+    end
+    self.client:list_hosts_async(function(hosts, herr)
+      if not hosts then
+        return callback(nil, herr)
+      end
+      callback(self:_bind_targets(opts, agent_id, hosts))
+    end)
+  end
+
+  local spec = opts.agent or d.agent
+  if opts.agents then
+    local agent_id, aerr = self.client:resolve_agent(spec, { agents = opts.agents })
+    if not agent_id then
+      return callback(nil, aerr)
+    end
+    return with_agent(agent_id)
+  end
+  self.client:resolve_agent_async(spec, function(agent_id, aerr)
+    if not agent_id then
+      return callback(nil, aerr)
+    end
+    with_agent(agent_id)
+  end)
 end
 
 ---nil out a JSON-null (vim.NIL) so it can't poison `a or b` chains. Defensive:
@@ -316,15 +367,11 @@ function Session:clear_codex_goal(callback)
   end)
 end
 
----Create a new durable session.
----@param opts? table
----@return table|nil session, table|nil err
-function Session:create(opts)
-  opts = opts or {}
-  local targets, err = self:resolve_targets(opts)
-  if not targets then
-    return nil, err
-  end
+---Build the POST /v1/sessions body from the adapter defaults and resolved targets.
+---@param opts table
+---@param targets table { agent_id, host_id?, workspace? }
+---@return table
+function Session:_create_body(opts, targets)
   local d = self.adapter.defaults or {}
   local body = { agent_id = targets.agent_id }
   if targets.host_id then
@@ -367,12 +414,45 @@ function Session:create(opts)
     body.labels = labels
   end
 
-  local s, cerr = self.client:create_session(body)
+  return body
+end
+
+---Create a new durable session.
+---@param opts? table
+---@return table|nil session, table|nil err
+function Session:create(opts)
+  opts = opts or {}
+  local targets, err = self:resolve_targets(opts)
+  if not targets then
+    return nil, err
+  end
+  local s, cerr = self.client:create_session(self:_create_body(opts, targets))
   if not s then
     return nil, cerr
   end
   self:_ingest_snapshot(s)
   return s
+end
+
+---Async twin of :create. Session creation is up to three sequential round trips
+---(agents, hosts, create), so blocking on it froze the editor for the whole of
+---"open a chat and send the first turn".
+---@param opts? table
+---@param callback fun(session: table|nil, err: table|nil)
+function Session:create_async(opts, callback)
+  opts = opts or {}
+  self:resolve_targets_async(opts, function(targets, err)
+    if not targets then
+      return callback(nil, err)
+    end
+    self.client:create_session_async(self:_create_body(opts, targets), function(s, cerr)
+      if not s then
+        return callback(nil, cerr)
+      end
+      self:_ingest_snapshot(s)
+      callback(s)
+    end)
+  end)
 end
 
 ---Fork a source session into a new, independently-runnable session.
@@ -436,6 +516,52 @@ function Session.fork(client, source, opts)
   return fork
 end
 
+---Async twin of Session.fork. Same two-call shape, same error contract (a launch
+---failure still carries `fork_session_id`) -- only the blocking is gone.
+---@param client CodeCompanion.Omnigent.Client
+---@param source table { session_id, host_id?, workspace? }
+---@param opts? table { title?, up_to_response_id?, branch_name?, base_branch? }
+---@param callback fun(fork: table|nil, err: table|nil)
+function Session.fork_async(client, source, opts, callback)
+  opts = opts or {}
+  if not (source and source.session_id) then
+    return callback(nil, { message = "fork requires a source session id", code = "session_required" })
+  end
+
+  client:fork_session_async(source.session_id, {
+    title = opts.title,
+    up_to_response_id = opts.up_to_response_id,
+  }, function(fork, err)
+    if not fork or not fork.id then
+      return callback(nil, err or { message = "fork returned no session", code = "fork_failed" })
+    end
+    if not source.host_id then
+      return callback(fork)
+    end
+    if not source.workspace then
+      return callback(nil, {
+        message = "source session has a host but no workspace; cannot launch the fork's runner",
+        code = "workspace_required",
+      })
+    end
+    local git = opts.branch_name and {
+      branch_name = opts.branch_name,
+      base_branch = opts.base_branch,
+    } or nil
+    client:launch_runner_async(source.host_id, {
+      session_id = fork.id,
+      workspace = source.workspace,
+      git = git,
+    }, function(_, lerr)
+      if lerr then
+        lerr.fork_session_id = fork.id
+        return callback(nil, lerr)
+      end
+      callback(fork)
+    end)
+  end)
+end
+
 ---Load an existing durable session: fetch snapshot + durable items.
 ---@param session_id string
 ---@return table|nil result { session, items }, table|nil err
@@ -458,6 +584,32 @@ function Session:load(session_id)
     self:_mark_seen(item.id, item.type, item.call_id)
   end
   return { session = s, items = items }
+end
+
+---Async twin of :load. Unlike the reconcile fetch this uses the full client
+---timeout: it is the resume path, so giving up early would present an empty chat
+---for a session that does have history.
+---@param session_id string
+---@param callback fun(result: table|nil, err: table|nil) result: { session, items }
+function Session:load_async(session_id, callback)
+  self.client:get_session_async(session_id, function(s, err)
+    if not s then
+      return callback(nil, err)
+    end
+    self:_ingest_snapshot(s)
+    self.session_id = s.id or session_id
+    local page = self.adapter.opts and self.adapter.opts.history_page_size
+    self.client:list_items_async(self.session_id, page and { limit = page } or nil, nil, function(items, ierr)
+      if not items then
+        -- Fail loudly: an empty resume must be distinguishable from a failed fetch.
+        return callback(nil, ierr)
+      end
+      for _, item in ipairs(items) do
+        self:_mark_seen(item.id, item.type, item.call_id)
+      end
+      callback({ session = s, items = items })
+    end)
+  end)
 end
 
 ---Record that an item has materialised in the chat, under every key that could
@@ -969,6 +1121,30 @@ function Session:compact_via_slash()
   return self:post_message("/compact")
 end
 
+---Async twin of :compact_via_slash, shaped like :compact rather than like the
+---sync twin: the refusals above are local preconditions and stay synchronous, so
+---the strategy queue still gets an immediate "did this one start?" answer, while
+---only the POST outcome arrives on the callback.
+---@param callback? fun(ok: boolean, err: table|nil) Invoked on the HTTP outcome only
+---@return boolean accepted, table|nil err
+function Session:compact_via_slash_async(callback)
+  if not self.session_id then
+    return false, { message = "no durable session to compact" }
+  end
+  if self:busy() then
+    return false, { message = "cannot compact while a turn is running; cancel or wait for it to finish" }
+  end
+  if not self:streaming() then
+    self:start_stream()
+  end
+  self:post_message_async("/compact", function(result, err)
+    if callback then
+      callback(result ~= nil, err)
+    end
+  end)
+  return true
+end
+
 ---Patch the session model (model_override).
 ---@param model string
 ---@return boolean, table|nil
@@ -1001,12 +1177,75 @@ function Session:set_config(key, value)
   return ok ~= nil, err
 end
 
+---Async twin of :set_model. Every caller either discards the result
+---(`Chat:change_model`) or reports it through a notify, so nothing needs the PATCH
+---to have landed before the editor moves on.
+---@param model string
+---@param callback? fun(ok: boolean, err: table|nil)
+---@return table|nil request_handle
+function Session:set_model_async(model, callback)
+  if not self.session_id then
+    self.model_override = model
+    if callback then
+      callback(true)
+    end
+    return nil
+  end
+  return self.client:update_session_async(self.session_id, { model_override = model }, function(res, err)
+    if res then
+      self.model_override = model
+      self.model = model
+    end
+    if callback then
+      callback(res ~= nil, err)
+    end
+  end)
+end
+
+---Async twin of :set_config.
+---@param key string
+---@param value any
+---@param callback? fun(ok: boolean, err: table|nil)
+---@return table|nil request_handle
+function Session:set_config_async(key, value, callback)
+  if not self.session_id then
+    if callback then
+      callback(false, { message = "no session" })
+    end
+    return nil
+  end
+  return self.client:update_session_async(self.session_id, { [key] = value }, function(res, err)
+    if res and key == "reasoning_effort" then
+      self.reasoning_effort = value
+    end
+    if callback then
+      callback(res ~= nil, err)
+    end
+  end)
+end
+
 ---Resolve an elicitation.
 ---@param elicitation_id string
 ---@param result table
 ---@return table|nil, table|nil
 function Session:resolve_elicitation(elicitation_id, result)
   return self.client:resolve_elicitation(self.session_id, elicitation_id, result)
+end
+
+---Async twin of :resolve_elicitation, for the tool-approval path. Every gated
+---tool call resolves through here, so this is the highest-frequency REST call in
+---a session -- and its only consumer is an error notification, which reads just
+---as well from a callback.
+---@param elicitation_id string
+---@param result table
+---@param callback? fun(result: table|nil, err: table|nil)
+---@return table|nil request_handle
+function Session:resolve_elicitation_async(elicitation_id, result, callback)
+  return self.client:resolve_elicitation_async(self.session_id, elicitation_id, result, function(res, err)
+    if callback then
+      callback(res, err)
+    end
+  end)
 end
 
 return Session

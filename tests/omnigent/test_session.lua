@@ -656,4 +656,253 @@ T["compaction_completed merges into usage without clobbering cost"] = function()
   h.eq(s.usage.by_model.a, 1)
 end
 
+-- ---- Async twins ----------------------------------------------------------
+--
+-- Each of these has a synchronous counterpart above. They exist because the sync
+-- ones run on nvim's main thread: opening a chat is up to three round trips
+-- (agents, hosts, create) and resuming one is two (snapshot, items), and blocking
+-- on any of them freezes the editor. The pairs must stay behaviourally identical,
+-- so these assert the SAME contracts -- resolved body, fail-closed refusals, error
+-- precedence -- reached through the callback instead of a return value.
+
+---A session whose async transport answers through the shared `router`, so the
+---async twins are exercised against exactly the same fake server as the sync ones.
+---@param defaults table
+---@param hostname string
+---@param cap table
+local function make_async(defaults, hostname, cap)
+  local route = router(cap)
+  local c = client.new({
+    url = "http://x",
+    hostname = hostname,
+    request = route,
+    async_request = function(o)
+      o.on_complete(route(o))
+      return { stop = function() end }
+    end,
+    job = cap.job,
+  })
+  local adapter = { type = "omnigent", url = "http://x", defaults = defaults, opts = {} }
+  return session.new({ adapter = adapter, client = c, callbacks = {} }), cap
+end
+
+T["create_async resolves agent/host/workspace and posts the right body"] = function()
+  local cap = { hosts = MAC }
+  local s = make_async({ agent = "claude-native-ui", host = "auto", workspace = "auto" }, "MacBook-Pro.local", cap)
+  local got
+  s:create_async(nil, function(sess, err)
+    got = { sess = sess, err = err }
+  end)
+
+  h.eq(got.err, nil)
+  h.eq(got.sess.id, "conv_1")
+  h.eq(s.session_id, "conv_1")
+  local body = vim.json.decode(cap.create.body)
+  h.is_true(body.agent_id ~= nil)
+  h.eq(body.host_id, "host_mac")
+  h.eq(body.workspace, vim.fn.getcwd())
+end
+
+T["create_async FAILS CLOSED when host='auto' cannot resolve"] = function()
+  local cap = { hosts = MAC_AND_DEVVM }
+  local s = make_async({ agent = "claude-native-ui", host = "auto", workspace = "auto" }, "not-a-registered-host", cap)
+  local got
+  s:create_async(nil, function(sess, err)
+    got = { sess = sess, err = err }
+  end)
+  h.eq(got.sess, nil)
+  h.eq(got.err.code, "host_unresolved")
+  h.eq(cap.create, nil) -- nothing was created
+end
+
+T["create_async reports an unresolvable agent before touching hosts"] = function()
+  -- Error precedence matches the sync path: the fetches are chained, not raced.
+  local cap = { hosts = MAC }
+  local s = make_async({ agent = "no-such-agent", host = "auto", workspace = "auto" }, "MacBook-Pro.local", cap)
+  local got
+  s:create_async(nil, function(sess, err)
+    got = { sess = sess, err = err }
+  end)
+  h.eq(got.sess, nil)
+  h.eq(got.err.code, "agent_not_found")
+end
+
+T["load_async hydrates the snapshot and seeds the seen set"] = function()
+  local cap = { hosts = MAC }
+  local s = make_async({}, "MacBook-Pro.local", cap)
+  local got
+  s:load_async("conv_existing", function(r, err)
+    got = { r = r, err = err }
+  end)
+
+  h.eq(got.err, nil)
+  h.is_true(got.r.session ~= nil)
+  h.is_true(#got.r.items > 0)
+  h.eq(s.session_id, got.r.session.id)
+  -- Seeded so a later reconnect reconcile does not re-render hydrated history.
+  for _, item in ipairs(got.r.items) do
+    if item.id then
+      h.eq(s.seen_items[item.id], true)
+    end
+  end
+end
+
+T["load_async fails loudly when the items fetch fails"] = function()
+  -- An empty resume must stay distinguishable from a failed one.
+  local cap = { hosts = MAC }
+  local route = router(cap)
+  local c = client.new({
+    url = "http://x",
+    request = route,
+    async_request = function(o)
+      if o.url:find("/items", 1, true) then
+        o.on_complete({ status = 503, body = '{"error":{"message":"runner gone"}}' })
+        return { stop = function() end }
+      end
+      o.on_complete(route(o))
+      return { stop = function() end }
+    end,
+  })
+  local s = session.new({
+    adapter = { type = "omnigent", url = "http://x", defaults = {}, opts = {} },
+    client = c,
+    callbacks = {},
+  })
+  local got
+  s:load_async("conv_existing", function(r, err)
+    got = { r = r, err = err }
+  end)
+  h.eq(got.r, nil)
+  h.eq(got.err.status, 503)
+end
+
+---`fork_router` behind the async transport.
+local function async_fork_client(cap)
+  local route = fork_router(cap)
+  return client.new({
+    url = "http://x",
+    request = route,
+    async_request = function(o)
+      o.on_complete(route(o))
+      return { stop = function() end }
+    end,
+  })
+end
+
+T["fork_async on a host-launched source forks then launches a worktree runner"] = function()
+  local cap = { calls = {} }
+  local got
+  session.fork_async(async_fork_client(cap), {
+    session_id = "conv_1",
+    host_id = "host_mac",
+    workspace = "/repo",
+  }, { branch_name = "cc-fork-1" }, function(fork, err)
+    got = { fork = fork, err = err }
+  end)
+
+  h.eq(got.err, nil)
+  h.eq(got.fork.id, "conv_2")
+  local launch = vim.json.decode(cap.launch.body)
+  h.eq(launch.session_id, "conv_2")
+  h.eq(launch.workspace, "/repo")
+  h.eq(launch.git.branch_name, "cc-fork-1")
+  h.eq(launch.git.base_branch, nil)
+end
+
+T["fork_async on a headless source does NOT launch a runner"] = function()
+  local cap = { calls = {} }
+  local got
+  session.fork_async(async_fork_client(cap), { session_id = "conv_1" }, nil, function(fork, err)
+    got = { fork = fork, err = err }
+  end)
+  h.eq(got.err, nil)
+  h.eq(got.fork.id, "conv_2")
+  h.eq(cap.launch, nil)
+end
+
+T["fork_async surfaces a launch failure carrying the unbound fork id"] = function()
+  local cap = { calls = {}, launch_status = 503 }
+  local got
+  session.fork_async(async_fork_client(cap), {
+    session_id = "conv_1",
+    host_id = "host_mac",
+    workspace = "/repo",
+  }, { branch_name = "cc-fork-1" }, function(fork, err)
+    got = { fork = fork, err = err }
+  end)
+  h.eq(got.fork, nil)
+  h.eq(got.err.code, "launch_failed")
+  h.eq(got.err.fork_session_id, "conv_2")
+end
+
+T["fork_async requires a source session id"] = function()
+  local got
+  session.fork_async(async_fork_client({ calls = {} }), {}, nil, function(fork, err)
+    got = { fork = fork, err = err }
+  end)
+  h.eq(got.fork, nil)
+  h.eq(got.err.code, "session_required")
+end
+
+T["compact_via_slash_async posts /compact and opens the stream"] = function()
+  local cap = {}
+  local s = compactable(cap)
+  local accepted, err = s:compact_via_slash_async()
+  h.eq(accepted, true)
+  h.eq(err, nil)
+
+  h.eq(#cap.async, 1)
+  local body = vim.json.decode(cap.async[1].body)
+  h.eq(body.type, "message")
+  h.eq(body.data.content[1].text, "/compact")
+  h.eq(cap.streamed, true)
+end
+
+T["compact_via_slash_async refuses its preconditions SYNCHRONOUSLY"] = function()
+  -- The strategy queue needs an immediate "did this one start?" answer; only the
+  -- POST outcome is deferred.
+  local cap = {}
+  local s = compactable(cap)
+  s.status = "running"
+  local accepted, err = s:compact_via_slash_async()
+  h.eq(accepted, false)
+  h.is_true(err.message:find("running", 1, true) ~= nil)
+  h.eq(#cap.async, 0)
+
+  s.status = "idle"
+  s.session_id = nil
+  accepted, err = s:compact_via_slash_async()
+  h.eq(accepted, false)
+  h.is_true(err.message:find("no durable session", 1, true) ~= nil)
+  h.eq(#cap.async, 0)
+end
+
+T["compact_via_slash_async reports an HTTP rejection to its callback"] = function()
+  local cap = { respond = { status = 503, body = '{"error":{"message":"runner gone"}}' } }
+  local s = compactable(cap)
+  local got
+  s:compact_via_slash_async(function(ok, err)
+    got = { ok = ok, err = err }
+  end)
+  h.eq(got.ok, false)
+  h.eq(got.err.status, 503)
+end
+
+T["resolve_elicitation_async posts the action to the resolve endpoint"] = function()
+  local cap = {}
+  local s = compactable(cap)
+  local got
+  s:resolve_elicitation_async("e1", { action = "accept" }, function(res, err)
+    got = { res = res, err = err }
+  end)
+
+  h.eq(#cap.async, 1)
+  local req = cap.async[1]
+  h.eq(req.method, "post")
+  h.is_true(req.url:find("/v1/sessions/conv_1/elicitations/e1/resolve", 1, true) ~= nil)
+  h.eq(vim.json.decode(req.body).action, "accept")
+  -- No stubbed response, so nothing came back yet: the caller was not blocked.
+  h.eq(got, nil)
+end
+
 return T
