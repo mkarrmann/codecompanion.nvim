@@ -77,8 +77,8 @@ local function fake_chat(adapter, sess)
       table.insert(self.messages, msg)
       table.insert(self.msg_calls, { role = msg.role, content = msg.content, meta = msg._meta })
     end,
-    done = function(self, output, reasoning, tools, meta, opts)
-      self.done_call = { output = output, reasoning = reasoning, opts = opts or {} }
+    done = function(self, output, reasoning)
+      self.done_call = { output = output, reasoning = reasoning }
       self.current_request = nil
     end,
     ready_calls = 0,
@@ -513,111 +513,6 @@ T["steer posts straight away when nothing is pending"] = function()
   h.eq(chat.omnigent_session:input_pending(), false)
   OmnigentHandler.steer(chat, "actually, use tabs")
   h.eq(vim.json.decode(cap.event.body).data.content[1].text, "actually, use tabs")
-end
-
--- The turn a steer produces belongs to the user. Left unclaimed it falls to the
--- observer, which renders it as "background activity" behind the empty `## Me`
--- that the previous turn's ready_for_input just wrote.
-T["the turn a steer produces is claimed as foreground"] = function()
-  local chat, handler = setup({})
-  handler:submit({})
-  local sess = chat.omnigent_session
-  h.eq(sess:adoption_pending(), false)
-
-  OmnigentHandler.steer(chat, "actually, use tabs")
-  h.eq(sess:adoption_pending(), true)
-
-  -- Turn 1 ends: its handler hands the stream to a fresh foreground handler
-  -- rather than detaching and letting the observer have it.
-  handler:on_update({ kind = "turn_completed" })
-  h.eq(sess:adoption_pending(), false)
-  h.is_true(sess.callbacks.on_update ~= nil)
-  -- ...and leaves the interaction open, so no input anchor is written and no
-  -- ChatDone tells the queue to submit into the incoming turn.
-  h.eq(chat.done_call.opts.turn_continues, true)
-end
-
-T["an ordinary turn still closes the interaction"] = function()
-  local chat, handler = setup({})
-  handler:submit({})
-  handler:on_update({ kind = "turn_completed" })
-  h.eq(chat.done_call.opts.turn_continues, false)
-  h.eq(chat.omnigent_session.callbacks.on_update, nil)
-end
-
-T["an adopted turn announces its own request lifecycle"] = function()
-  local chat, handler = setup({})
-  handler:submit({})
-  OmnigentHandler.steer(chat, "actually, use tabs")
-  handler:on_update({ kind = "turn_completed" })
-
-  local started = {}
-  local group = vim.api.nvim_create_augroup("cc_test_adopt", { clear = true })
-  vim.api.nvim_create_autocmd("User", {
-    group = group,
-    pattern = "CodeCompanionRequestStarted",
-    callback = function(args)
-      table.insert(started, args.data)
-    end,
-  })
-
-  -- Adoption alone announces nothing: the turn may never arrive.
-  h.eq(#started, 0)
-  chat.omnigent_session.callbacks.on_update({ kind = "turn_started" })
-  h.eq(#started, 1)
-  -- Once only, however much the turn streams.
-  chat.omnigent_session.callbacks.on_update({ kind = "message_delta", delta = "hi" })
-  h.eq(#started, 1)
-  vim.api.nvim_del_augroup_by_id(group)
-end
-
--- The harness folded the steered message into the turn that was already ending,
--- so no new turn ever starts. The adopted handler must not report a request it
--- never announced, or the queue waits on a turn that does not exist.
-T["an adopted turn that never starts stays silent"] = function()
-  local chat, handler = setup({})
-  handler:submit({})
-  OmnigentHandler.steer(chat, "actually, use tabs")
-  handler:on_update({ kind = "turn_completed" })
-  local adopted_calls = #chat.buf_calls
-
-  local finished = 0
-  local group = vim.api.nvim_create_augroup("cc_test_adopt_silent", { clear = true })
-  vim.api.nvim_create_autocmd("User", {
-    group = group,
-    pattern = "CodeCompanionRequestFinished",
-    callback = function()
-      finished = finished + 1
-    end,
-  })
-
-  chat.done_call = nil
-  chat.omnigent_session.callbacks.on_update({ kind = "turn_completed" })
-  h.eq(finished, 0)
-  h.eq(chat.done_call, nil)
-  h.eq(#chat.buf_calls, adopted_calls)
-  vim.api.nvim_del_augroup_by_id(group)
-end
-
-T["steering an idle session claims the turn immediately"] = function()
-  local chat, handler = setup({})
-  handler:submit({})
-  handler:on_update({ kind = "turn_completed" }) -- detaches; session now idle
-  h.eq(chat.omnigent_session.callbacks.on_update, nil)
-
-  OmnigentHandler.steer(chat, "one more thing")
-  -- No running turn's `_complete` will ever redeem the claim, so steer does.
-  h.eq(chat.omnigent_session:adoption_pending(), false)
-  h.is_true(chat.omnigent_session.callbacks.on_update ~= nil)
-end
-
-T["steering reports what the harness actually supports"] = function()
-  local chat = setup({})
-  local sess = chat.omnigent_session
-  sess.harness = "claude-sdk"
-  -- Undeclared is not "no": omnigent reserves a `steering` capability and
-  -- populates it for nothing, so callers must not read that as a refusal.
-  h.eq(sess:steering_support(), "unknown")
 end
 
 T["steer rewrites an agent command on the wire only"] = function()

@@ -1582,15 +1582,6 @@ function Chat:done(output, reasoning, tools, meta, opts)
   if require("codecompanion.interactions.chat.context_management").check(self) then
     return
   end
-
-  -- Another turn is already on its way -- a message was posted mid-turn and the
-  -- turn it produces has been claimed. The interaction is not over: writing the
-  -- input anchor now would strand an empty `## Me` above that turn's output, and
-  -- ChatDone would tell a queue to submit its next message into it.
-  if opts.turn_continues then
-    return
-  end
-
   self:ready_for_input()
 
   self:dispatch("on_completed", { status = self.status })
