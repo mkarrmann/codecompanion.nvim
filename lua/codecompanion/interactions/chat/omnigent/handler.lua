@@ -43,9 +43,14 @@ end
 
 ---Ensure a live session runtime exists (create new or load + hydrate existing) and
 ---bind its update/error callbacks to THIS handler (stored so we can detach later).
+---
+---ASYNCHRONOUS: creating a session is up to three round trips (agents, hosts,
+---create) and loading one is two (snapshot, items). Blocking on either meant the
+---editor was frozen for the whole of "open a chat", which is exactly when the
+---user expects to be able to keep typing. The callback fires on the main loop.
 ---@param opts? table { foreground?: boolean }
----@return boolean ok, table|nil err
-function OmnigentHandler:ensure_session(opts)
+---@param callback fun(ok: boolean, err: table|nil)
+function OmnigentHandler:ensure_session_async(opts, callback)
   opts = opts or {}
   local chat = self.chat
   if not chat.omnigent_session then
@@ -82,32 +87,38 @@ function OmnigentHandler:ensure_session(opts)
 
   if session.session_id then
     self:_ensure_observer()
-    return true
+    return callback(true)
+  end
+
+  local function ready()
+    chat.omnigent_session_id = session.session_id
+    if chat.update_metadata then
+      pcall(function()
+        chat:update_metadata()
+      end)
+    end
+    self:_ensure_observer()
+    utils.fire("ChatRefreshCache", { bufnr = chat.bufnr })
+    utils.fire("OmnigentSessionReady", { bufnr = chat.bufnr, session_id = session.session_id })
+    callback(true)
   end
 
   if chat.omnigent_session_id then
-    local r, err = session:load(chat.omnigent_session_id)
-    if not r then
-      return false, err
-    end
-    self:_hydrate(r.items)
+    session:load_async(chat.omnigent_session_id, function(r, err)
+      if not r then
+        return callback(false, err)
+      end
+      self:_hydrate(r.items)
+      ready()
+    end)
   else
-    local sess, err = session:create()
-    if not sess then
-      return false, err
-    end
-  end
-
-  chat.omnigent_session_id = session.session_id
-  if chat.update_metadata then
-    pcall(function()
-      chat:update_metadata()
+    session:create_async(nil, function(sess, err)
+      if not sess then
+        return callback(false, err)
+      end
+      ready()
     end)
   end
-  self:_ensure_observer()
-  utils.fire("ChatRefreshCache", { bufnr = chat.bufnr })
-  utils.fire("OmnigentSessionReady", { bufnr = chat.bufnr, session_id = session.session_id })
-  return true
 end
 
 ---Install the persistent background observer and open the stream passively, so
@@ -171,18 +182,21 @@ end
 ---Resume a saved session: load + hydrate history WITHOUT posting a turn. This is
 ---the correct entry for opening a session to view/continue (used by the M3 resume
 ---command); submit() is only for posting a new turn.
----@return boolean ok, table|nil err
-function OmnigentHandler:resume()
-  local ok, err = self:ensure_session()
-  self:_detach() -- no active foreground request while merely attached
-  if not ok then
-    self.chat.status = "error"
-    self:_render_error(err or "Failed to resume omnigent session")
-  end
-  if self.chat.ready_for_input then
-    self.chat:ready_for_input()
-  end
-  return ok, err
+---@param callback? fun(ok: boolean, err: table|nil)
+function OmnigentHandler:resume(callback)
+  self:ensure_session_async(nil, function(ok, err)
+    self:_detach() -- no active foreground request while merely attached
+    if not ok then
+      self.chat.status = "error"
+      self:_render_error(err or "Failed to resume omnigent session")
+    end
+    if self.chat.ready_for_input then
+      self.chat:ready_for_input()
+    end
+    if callback then
+      callback(ok, err)
+    end
+  end)
 end
 
 ---Collect the unsent user message content and the messages to mark sent.
@@ -256,84 +270,132 @@ function OmnigentHandler:_mark_sent(marked)
   end
 end
 
+---Mark this submit finished and release `chat.current_request` if it still points
+---at THIS handle.
+---
+---Also the reason submit() can return nil: when everything resolves synchronously
+---(an inline transport, or a precondition failure) the release happens BEFORE the
+---caller's `chat.current_request = submit()` assignment, which would otherwise
+---resurrect a dead handle and wedge the buffer.
+function OmnigentHandler:_settle()
+  self._settled = true
+  if self._handle and self.chat.current_request == self._handle then
+    self.chat.current_request = nil
+  end
+end
+
 ---Submit a foreground turn.
+---
+---Returns its handle IMMEDIATELY, before the session exists. Everything from here
+---on -- resolving targets, creating or loading the session, posting the message --
+---is asynchronous, because each of those is a REST round trip and blocking on them
+---is the editor freezing the moment you press send.
+---
+---The handle is what keeps a second submit out while that is in flight
+---(`Chat:submit` early-returns while `chat.current_request` is set), so every exit
+---path must release it: `_complete` -> `chat:done()` for a started turn, `_settle`
+---for the paths that never start one.
 ---@param payload table
 ---@return table|nil request handle
 function OmnigentHandler:submit(payload)
-  local ok, err = self:ensure_session()
-  if not ok then
-    -- No request was started; just surface the error and finish.
-    self.chat.status = "error"
-    self:_render_error(err or "Failed to establish omnigent session")
-    self:_detach()
-    self.chat:done(self.output)
-    return nil
-  end
+  local chat = self.chat
 
-  local session = self.chat.omnigent_session
-
-  local text, marked = self:_unsent_user_text()
-  if not text or text == "" then
-    -- Not an error. This is a bare resume (history hydrated, no new prompt) or a
-    -- blank submit: don't post, don't mark the chat failed -- detach and hand
-    -- control back to the user.
-    log:debug("[Omnigent::Handler] Nothing to submit; ready for input")
-    self:_detach()
-    if self.chat.ready_for_input then
-      self.chat:ready_for_input()
-    end
-    return nil
-  end
-
-  -- Announce the request lifecycle BEFORE opening the stream / posting, so a fast
-  -- terminal event delivered on the stream can never reach _complete() before
-  -- request_id exists (which would drop RequestFinished and desync the queue).
-  self.request_id = tostring(math.random(10000000))
-  utils.fire("RequestStarted", {
-    id = self.request_id,
-    bufnr = self.chat.bufnr,
-    adapter = {
-      name = self.chat.adapter.name,
-      formatted_name = self.chat.adapter.formatted_name,
-      type = "omnigent",
-    },
-  })
-
-  -- Open the stream BEFORE posting: it is live-tail, not a replay source.
-  session:start_stream()
-
-  -- Rewrite on the WIRE only: the transcript keeps what the user actually typed,
-  -- matching how the ACP path transforms its payload rather than its history.
-  -- Posted asynchronously so the editor stays live while the request is in
-  -- flight. The handle below needs nothing from the response -- session_id is
-  -- already known -- and the failure path was always side-effecting
-  -- (_render_error + _complete), so it works just as well from a callback.
-  --
-  -- Returning the handle before the POST resolves is what keeps a second submit
-  -- out: Chat:submit early-returns while chat.current_request is set, and
-  -- _complete -> chat:done() clears it, so a failure still frees the buffer for
-  -- a retry. _mark_sent therefore stays on the success path exactly as before,
-  -- with no window in which the same text could be posted twice.
-  session:post_message_async(OmnigentHandler.transform_agent_command(text, agent_command_trigger()), function(res, perr)
-    if not res then
-      self:_render_error(perr or "Failed to post message")
-      self:_complete("error") -- fires RequestFinished + chat:done + detaches
-      return
-    end
-    self:_mark_sent(marked)
-  end)
-
-  return {
-    session_id = session.session_id,
+  local handle = {
+    -- Filled in once the session resolves; nil until then.
+    session_id = nil,
     status = function()
-      return session.status
+      local s = chat.omnigent_session
+      return s and s.status
     end,
     cancel = function()
-      pcall(function()
-        session:interrupt_async()
-      end)
+      self._cancelled = true
+      if self._post then
+        pcall(function()
+          self._post.stop()
+        end)
+      end
+      -- Cancelling before the session exists cannot interrupt anything: the
+      -- create/load may still land server-side, but it lands as an idle session
+      -- nobody posted to, and `_cancelled` keeps this handler off it.
+      local s = chat.omnigent_session
+      if s and s.session_id then
+        pcall(function()
+          s:interrupt_async()
+        end)
+      end
     end,
   }
+  self._handle = handle
+
+  self:ensure_session_async(nil, function(ok, err)
+    if self._cancelled then
+      return
+    end
+    if not ok then
+      -- No turn was started; surface the error and free the buffer for a retry.
+      chat.status = "error"
+      self:_render_error(err or "Failed to establish omnigent session")
+      self:_detach()
+      self:_settle()
+      chat:done(self.output)
+      return
+    end
+
+    local session = chat.omnigent_session
+    handle.session_id = session.session_id
+
+    local text, marked = self:_unsent_user_text()
+    if not text or text == "" then
+      -- Not an error. This is a bare resume (history hydrated, no new prompt) or a
+      -- blank submit: don't post, don't mark the chat failed -- detach and hand
+      -- control back to the user.
+      log:debug("[Omnigent::Handler] Nothing to submit; ready for input")
+      self:_detach()
+      self:_settle()
+      if chat.ready_for_input then
+        chat:ready_for_input()
+      end
+      return
+    end
+
+    -- Announce the request lifecycle BEFORE opening the stream / posting, so a fast
+    -- terminal event delivered on the stream can never reach _complete() before
+    -- request_id exists (which would drop RequestFinished and desync the queue).
+    self.request_id = tostring(math.random(10000000))
+    utils.fire("RequestStarted", {
+      id = self.request_id,
+      bufnr = chat.bufnr,
+      adapter = {
+        name = chat.adapter.name,
+        formatted_name = chat.adapter.formatted_name,
+        type = "omnigent",
+      },
+    })
+
+    -- Open the stream BEFORE posting: it is live-tail, not a replay source.
+    session:start_stream()
+
+    -- Rewrite on the WIRE only: the transcript keeps what the user actually typed,
+    -- matching how the ACP path transforms its payload rather than its history.
+    -- _mark_sent stays on the success path, so a failure leaves the text unsent
+    -- and a retry resends it exactly once.
+    self._post = session:post_message_async(
+      OmnigentHandler.transform_agent_command(text, agent_command_trigger()),
+      function(res, perr)
+        if not res then
+          self:_render_error(perr or "Failed to post message")
+          self:_complete("error") -- fires RequestFinished + chat:done + detaches
+          return
+        end
+        self:_mark_sent(marked)
+      end
+    )
+  end)
+
+  if self._settled then
+    return nil
+  end
+  return handle
 end
 
 ---Handle a normalised session update (live foreground turn).
@@ -508,6 +570,7 @@ function OmnigentHandler:_complete(status)
   end
   self._done = true
   self:_detach()
+  self:_settle()
   if not self.chat.status or self.chat.status == "" then
     self.chat.status = status
   end

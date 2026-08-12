@@ -164,6 +164,78 @@ T["submit does not block: it returns while the POST is still outstanding"] = fun
   h.eq(msg._meta.sent, true)
 end
 
+---Build a chat + handler whose session CREATE is held open until `release()`.
+---@return table chat, table handler, table cap, fun() release
+local function slow_create_setup()
+  local cap = { hosts = MAC, drive = {} }
+  cap.job = function(o)
+    cap.drive.on_stdout = o.on_stdout
+    cap.drive.on_exit = o.on_exit
+    return { stop = function() end }
+  end
+  local route = router(cap)
+  local pending
+  local c = client.new({
+    url = "http://x",
+    hostname = "MacBook-Pro.local",
+    request = route,
+    async_request = function(o)
+      -- Agents/hosts resolve inline; only the create is held, so submit gets as
+      -- far as "session does not exist yet" and stops there.
+      if o.method == "post" and o.url:find("/v1/sessions", 1, true) and not o.url:find("/events", 1, true) then
+        pending = function()
+          o.on_complete(route(o))
+        end
+        return { stop = function() end }
+      end
+      o.on_complete(route(o))
+    end,
+    job = cap.job,
+  })
+  local sess = session.new({ adapter = ADAPTER, client = c })
+  local chat = fake_chat(ADAPTER, sess)
+  chat.messages = { { role = "user", content = "say ok", _meta = {} } }
+  return chat, OmnigentHandler.new(chat), cap, function()
+    pending()
+  end
+end
+
+T["submit does not block on session creation"] = function()
+  -- The regression this guards: submit created the session through the SYNC
+  -- transport -- up to three round trips (agents, hosts, create) -- freezing the
+  -- editor for the whole of "open a chat and send the first turn".
+  local chat, handler, cap, release = slow_create_setup()
+
+  local handle = handler:submit({})
+
+  -- Returned with the session still being created: no id, nothing posted, and
+  -- no stream yet (it is opened only once there is a session to stream).
+  h.is_true(handle ~= nil)
+  h.eq(handle.session_id, nil)
+  h.eq(cap.event, nil)
+  h.eq(cap.drive.on_stdout, nil)
+
+  release()
+
+  h.eq(handle.session_id, "conv_1")
+  h.is_true(cap.drive.on_stdout ~= nil)
+  h.eq(vim.json.decode(cap.event.body).data.content[1].text, "say ok")
+  h.eq(chat.messages[1]._meta.sent, true)
+end
+
+T["cancelling while the session is still being created never posts"] = function()
+  local chat, handler, cap, release = slow_create_setup()
+
+  local handle = handler:submit({})
+  handle.cancel()
+  release()
+
+  -- The create landed, but the abandoned submit must not have posted the turn
+  -- (nor an interrupt: there was no session to interrupt when cancel ran).
+  h.eq(cap.event, nil)
+  h.eq(chat.messages[1]._meta.sent, nil)
+end
+
 T["submit failure still frees the chat for a retry"] = function()
   -- On failure submit used to return nil, leaving chat.current_request unset.
   -- Async it returns a handle first, so the buffer must be freed by the failure
@@ -480,7 +552,10 @@ end
 
 T["resume() hydrates history without posting or erroring"] = function()
   local chat, handler, cap = resume_setup()
-  local ok = handler:resume()
+  local ok
+  handler:resume(function(r)
+    ok = r
+  end)
   h.eq(ok, true)
 
   -- items-lifecycle.json has 2 renderable durable messages (user + assistant);

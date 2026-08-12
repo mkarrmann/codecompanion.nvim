@@ -42,8 +42,8 @@ T["refreshes state and pauses an active goal"] = function()
     adapter = { type = "omnigent", defaults = { agent = "codex-native-ui" } },
     omnigent_session = session,
   }
-  controller.ensure_session = function()
-    return true
+  controller.ensure_session = function(_, callback)
+    callback(true)
   end
   vim.ui.select = function(items, _, callback)
     for _, item in ipairs(items) do
@@ -93,9 +93,9 @@ T["creates a Goal as the first chat action"] = function()
     adapter = { type = "omnigent", defaults = { agent = "codex-native-ui" } },
     omnigent_session = session,
   }
-  controller.ensure_session = function()
+  controller.ensure_session = function(_, callback)
     ensured = true
-    return true
+    callback(true)
   end
   local selections = { "Create goal", "active" }
   vim.ui.select = function(_, _, callback)

@@ -21,24 +21,26 @@ function M.submit(chat, payload)
 end
 
 ---Resume an existing durable session into the chat (load + hydrate, no post).
+---Asynchronous: the outcome arrives on `callback`.
 ---@param chat CodeCompanion.Chat
 ---@param session_id? string
----@return boolean ok, table|nil err
-function M.resume(chat, session_id)
+---@param callback? fun(ok: boolean, err: table|nil)
+function M.resume(chat, session_id, callback)
   if session_id then
     chat.omnigent_session_id = session_id
     chat.omnigent_session = nil
   end
   local handler = require("codecompanion.interactions.chat.omnigent.handler").new(chat)
-  return handler:resume()
+  handler:resume(callback)
 end
 
 ---Create or attach an Omnigent session without posting a chat message.
+---Asynchronous: the outcome arrives on `callback`.
 ---@param chat CodeCompanion.Chat
----@return boolean ok, table|nil err
-function M.ensure_session(chat)
+---@param callback fun(ok: boolean, err: table|nil)
+function M.ensure_session(chat, callback)
   local handler = require("codecompanion.interactions.chat.omnigent.handler").new(chat)
-  return handler:ensure_session({ foreground = false })
+  handler:ensure_session_async({ foreground = false }, callback)
 end
 
 ---Change the session model (delegates to the adapter family set_model).

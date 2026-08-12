@@ -170,28 +170,29 @@ end
 
 ---@return nil
 function SlashCommand:execute()
-  local ok, err = controller.ensure_session(self.Chat)
-  if not ok then
-    return notify_error(err)
-  end
-  local session = self.Chat.omnigent_session
-  if not session:supports_codex_goal() then
-    return notify_error("The attached session is not codex-native-ui")
-  end
-  session:get_codex_goal(function(goal, get_err)
-    if get_err then
-      return notify_error(get_err)
+  controller.ensure_session(self.Chat, function(ok, err)
+    if not ok then
+      return notify_error(err)
     end
-    if goal then
-      return select_existing_action(session, goal)
+    local session = self.Chat.omnigent_session
+    if not session:supports_codex_goal() then
+      return notify_error("The attached session is not codex-native-ui")
     end
-    vim.ui.select({ "Create goal", "Cancel" }, {
-      prompt = "No active Codex Goal",
-      kind = "codecompanion.nvim",
-    }, function(choice)
-      if choice == "Create goal" then
-        edit_goal(session)
+    session:get_codex_goal(function(goal, get_err)
+      if get_err then
+        return notify_error(get_err)
       end
+      if goal then
+        return select_existing_action(session, goal)
+      end
+      vim.ui.select({ "Create goal", "Cancel" }, {
+        prompt = "No active Codex Goal",
+        kind = "codecompanion.nvim",
+      }, function(choice)
+        if choice == "Create goal" then
+          edit_goal(session)
+        end
+      end)
     end)
   end)
 end

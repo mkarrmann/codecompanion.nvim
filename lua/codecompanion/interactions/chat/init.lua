@@ -1321,10 +1321,13 @@ end
 ---snapshot + durable history and hydrate the transcript WITHOUT posting a turn.
 ---This is the M3 resume entry (used by the `/omnigent_resume` picker and the
 ---dotfiles resume UX); `submit()` is only for posting new turns.
+---
+---Asynchronous -- the load is two REST round trips and must not block the editor.
 ---@param session_id? string If given, (re)bind this chat to that session id
----@return boolean ok, table|nil err
-function Chat:resume_omnigent(session_id)
-  return require("codecompanion.interactions.chat.omnigent.controller").resume(self, session_id)
+---@param callback? fun(ok: boolean, err: table|nil)
+---@return nil
+function Chat:resume_omnigent(session_id, callback)
+  return require("codecompanion.interactions.chat.omnigent.controller").resume(self, session_id, callback)
 end
 
 ---Request server-side context compaction of this chat's durable omnigent session.

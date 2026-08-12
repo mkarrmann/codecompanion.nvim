@@ -59,15 +59,19 @@ T["ensure_session delegates without binding a foreground request"] = function()
   package.loaded[handler_module] = {
     new = function()
       return {
-        ensure_session = function(_, opts)
+        ensure_session_async = function(_, opts, callback)
           received = opts
-          return true
+          callback(true)
         end,
       }
     end,
   }
   local ok, err = pcall(function()
-    h.eq(controller.ensure_session({}), true)
+    local ensured
+    controller.ensure_session({}, function(r)
+      ensured = r
+    end)
+    h.eq(ensured, true)
     h.eq(received.foreground, false)
   end)
   package.loaded[handler_module] = original
