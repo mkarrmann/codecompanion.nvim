@@ -560,6 +560,65 @@ function OmnigentHandler:_render_item(u)
   -- Function-call output and resource events are folded or setup-only.
 end
 
+---Post `text` into the turn that is already running, instead of starting a new one.
+---
+---Omnigent has no steer flag on the wire: POSTing a message while a task is active
+---IS steering (the server's create-or-steer path hands it to the active task's
+---inbox, and for an SDK harness the runner live-injects it into the streaming
+---response). So steering is only a question of posting now rather than waiting.
+---
+---This cannot go through `Chat:submit`, which early-returns while
+---`chat.current_request` is set -- that guard is exactly what makes a *second
+---turn* impossible, and steering is not a second turn.
+---
+---The transcript is written here rather than left to the round-trip, because a
+---steered message comes back as `session.input.consumed` (see omnigent's
+---SessionInputConsumedEvent: emitted "either onto a steered active turn or as the
+---seed item of a freshly-started one") -- an event that carries no response id and
+---that nothing renders. `item_committed` is response OUTPUT only, so waiting for
+---it would leave a steer invisible on every non-native harness.
+---@param chat table
+---@param text string
+---@return boolean ok, string? err
+function OmnigentHandler.steer(chat, text)
+  local session = chat and chat.omnigent_session
+  if not (session and session.post_message_async) then
+    return false, "no omnigent session on this chat"
+  end
+  -- No durable session yet means there is no turn to steer into; posting would
+  -- build a request against a nil id.
+  if not session.session_id then
+    return false, "no active omnigent session to steer"
+  end
+  if type(text) ~= "string" or vim.trim(text) == "" then
+    return false, "nothing to steer"
+  end
+
+  local C = config.constants
+  local MT = chat.MESSAGE_TYPES
+  local wire = OmnigentHandler.transform_agent_command(text, agent_command_trigger())
+
+  -- Render before posting so the message is in the transcript even if the POST
+  -- fails (the error lands right below it, in context).
+  chat:add_buf_message({ role = C.USER_ROLE, content = text }, { type = MT.USER_MESSAGE })
+  if chat.add_message then
+    chat:add_message({ role = C.USER_ROLE, content = text }, { _meta = { sent = true } })
+  end
+  render.note_local_user_echo(chat, text, wire)
+
+  session:post_message_async(wire, function(res, perr)
+    if not res then
+      local msg = type(perr) == "table" and (perr.message or vim.inspect(perr)) or tostring(perr)
+      log:error("[Omnigent::Handler] steer failed: %s", msg)
+      chat:add_buf_message(
+        { role = C.LLM_ROLE, content = "\n> [!WARNING] Steer failed: " .. msg .. "\n" },
+        { type = MT.SYSTEM_MESSAGE or MT.LLM_MESSAGE }
+      )
+    end
+  end)
+  return true
+end
+
 ---@param err table|string
 function OmnigentHandler:on_error(err)
   self:_render_error(err)

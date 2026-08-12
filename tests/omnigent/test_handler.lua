@@ -405,6 +405,67 @@ T["a mirrored echo of our own submit is not rendered twice"] = function()
   h.eq(chat.buf_calls[#chat.buf_calls].type, "user_msg")
 end
 
+T["steer posts into the running turn and renders it"] = function()
+  local chat, handler, cap = setup({})
+  handler:submit({})
+  cap.event = nil
+
+  local ok, err = OmnigentHandler.steer(chat, "actually, use tabs")
+  h.eq(ok, true)
+  h.eq(err, nil)
+
+  -- Posted as an ordinary message event: that IS the steer (no wire flag).
+  h.eq(vim.json.decode(cap.event.body).data.content[1].text, "actually, use tabs")
+
+  -- Rendered immediately -- a steer comes back as session.input.consumed, which
+  -- nothing else renders, so waiting for the round-trip would lose it.
+  local last = chat.buf_calls[#chat.buf_calls]
+  h.eq(last.content, "actually, use tabs")
+  h.eq(last.type, "user_msg")
+  h.eq(chat.messages[#chat.messages]._meta.sent, true)
+
+  -- Not counted as assistant output.
+  h.eq(table.concat(handler.output), "")
+end
+
+T["steer rewrites an agent command on the wire only"] = function()
+  local chat, handler, cap = setup({})
+  handler:submit({})
+  OmnigentHandler.steer(chat, "\\compact")
+  h.eq(vim.json.decode(cap.event.body).data.content[1].text, "/compact")
+  -- The transcript keeps what the user actually typed.
+  h.eq(chat.buf_calls[#chat.buf_calls].content, "\\compact")
+end
+
+T["a steered message is not re-rendered when it mirrors back"] = function()
+  local chat, handler = setup({})
+  handler:submit({})
+  OmnigentHandler.steer(chat, "\\compact")
+  local before = #chat.buf_calls
+  -- Both forms of the echo are suppressed: the mirror carries what the agent
+  -- received, not what was typed.
+  handler:_render_item({ item_type = "message", role = "user", text = "/compact" })
+  h.eq(#chat.buf_calls, before)
+  handler:_render_item({ item_type = "message", role = "user", text = "\\compact" })
+  h.eq(#chat.buf_calls, before)
+end
+
+T["steer refuses without a session"] = function()
+  local chat = setup({})
+  chat.omnigent_session = nil
+  local ok, err = OmnigentHandler.steer(chat, "hi")
+  h.eq(ok, false)
+  h.is_true(err ~= nil)
+end
+
+T["steer refuses empty text"] = function()
+  local chat, handler = setup({})
+  handler:submit({})
+  local ok, err = OmnigentHandler.steer(chat, "   ")
+  h.eq(ok, false)
+  h.is_true(err ~= nil)
+end
+
 T["cancel posts an interrupt"] = function()
   local chat, handler, cap = setup({})
   local handle = handler:submit({})
