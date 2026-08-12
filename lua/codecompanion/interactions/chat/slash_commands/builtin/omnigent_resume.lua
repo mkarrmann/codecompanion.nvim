@@ -4,8 +4,8 @@
 -- before submitting a turn, mirroring the ACP /resume constraint.
 --=============================================================================
 
-local utils = require("codecompanion.utils")
 local sessions_lib = require("codecompanion.interactions.chat.omnigent.sessions")
+local utils = require("codecompanion.utils")
 
 ---@class CodeCompanion.SlashCommand.OmnigentResume: CodeCompanion.SlashCommand
 local SlashCommand = {}

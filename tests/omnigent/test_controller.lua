@@ -1,8 +1,8 @@
 local h = require("tests.helpers")
 local new_set = MiniTest.new_set
 
-local sessionful = require("codecompanion.interactions.chat.sessionful")
 local controller = require("codecompanion.interactions.chat.omnigent.controller")
+local sessionful = require("codecompanion.interactions.chat.sessionful")
 
 local T = new_set()
 
@@ -44,9 +44,11 @@ end
 
 T["close stops the stream (no-op without a session)"] = function()
   local stopped = false
-  controller.close({ omnigent_session = { stop_stream = function()
-    stopped = true
-  end } })
+  controller.close({ omnigent_session = {
+    stop_stream = function()
+      stopped = true
+    end,
+  } })
   h.eq(stopped, true)
   -- must not throw without a session
   controller.close({})

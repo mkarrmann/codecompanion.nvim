@@ -79,12 +79,15 @@ p("M4 observer saw (should be empty during foreground):", #rendered)
 -- ---- M6: controller.session_meta on the live session -----------------------
 local controller = require("codecompanion.interactions.chat.omnigent.controller")
 local meta = controller.session_meta({ omnigent_session = session })
-p("M6 session_meta:", vim.inspect({
-  session_id = meta.session_id,
-  status = meta.status,
-  streaming = meta.streaming,
-  model = meta.model,
-}))
+p(
+  "M6 session_meta:",
+  vim.inspect({
+    session_id = meta.session_id,
+    status = meta.status,
+    streaming = meta.streaming,
+    model = meta.model,
+  })
+)
 
 session:stop_stream()
 p("DONE. foreground_text_nonempty =", tostring(#fg > 0))

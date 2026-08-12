@@ -1,8 +1,8 @@
 local h = require("tests.helpers")
 local new_set = MiniTest.new_set
 
-local elicit = require("codecompanion.interactions.chat.omnigent.elicitation")
 local approval = require("codecompanion.interactions.chat.helpers.approval_prompt")
+local elicit = require("codecompanion.interactions.chat.omnigent.elicitation")
 
 -- The "no id" case deliberately hits log:error; silence it for clean output.
 require("codecompanion.utils.log").error = function() end

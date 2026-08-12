@@ -264,7 +264,12 @@ T["ingests JSON null fields as nil (no vim.NIL model poisoning)"] = function()
     end,
   })
   local s = session.new({
-    adapter = { type = "omnigent", url = "http://x", defaults = { agent = "claude-native-ui", host = "auto", workspace = "auto" }, opts = {} },
+    adapter = {
+      type = "omnigent",
+      url = "http://x",
+      defaults = { agent = "claude-native-ui", host = "auto", workspace = "auto" },
+      opts = {},
+    },
     client = c,
   })
   local _, err = s:create()
@@ -616,9 +621,14 @@ T["compact refuses without a durable session"] = function()
 end
 
 T["compact reports an HTTP rejection to its callback"] = function()
-  local cap = { respond = { status = 409, body = vim.json.encode({
-    error = { code = "conflict", message = "Cannot compact while a turn is running" },
-  }) } }
+  local cap = {
+    respond = {
+      status = 409,
+      body = vim.json.encode({
+        error = { code = "conflict", message = "Cannot compact while a turn is running" },
+      }),
+    },
+  }
   local s = compactable(cap)
   local got
   s:compact({}, function(ok, err)

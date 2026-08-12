@@ -277,7 +277,9 @@ T["a 4xx refusal falls through to the slash_command strategy"] = function()
   h.eq(compaction.in_flight(chat), true) -- still pending: waiting for the turn
   -- The refusal is a routing fact, not a failure the user should see.
   h.eq(#chat.buf_calls, 0)
-  local phases = vim.tbl_map(function(e) return e.phase end, events)
+  local phases = vim.tbl_map(function(e)
+    return e.phase
+  end, events)
   h.eq(phases[#phases], "requested")
   h.eq(events[#events].strategy, "slash_command")
 

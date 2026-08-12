@@ -1,8 +1,8 @@
 local h = require("tests.helpers")
 local new_set = MiniTest.new_set
 
-local sse = require("codecompanion.omnigent.sse")
 local events = require("codecompanion.omnigent.events")
+local sse = require("codecompanion.omnigent.sse")
 
 local T = new_set()
 

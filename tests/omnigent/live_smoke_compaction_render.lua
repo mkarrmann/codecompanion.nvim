@@ -13,11 +13,11 @@
 --
 --   nvim --headless --noplugin -u tests/omnigent/minimal_init.lua \
 --     -c "luafile tests/omnigent/live_smoke_compaction_render.lua" -c "qa!"
-local client = require("codecompanion.omnigent.client")
-local session = require("codecompanion.omnigent.session")
 local Observer = require("codecompanion.interactions.chat.omnigent.observer")
+local client = require("codecompanion.omnigent.client")
 local compaction = require("codecompanion.interactions.chat.omnigent.compaction")
 local fs = require("tests.omnigent.fake_server")
+local session = require("codecompanion.omnigent.session")
 
 local function log(...)
   print("[render-smoke]", ...)

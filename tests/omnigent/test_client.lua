@@ -206,9 +206,12 @@ T["Codex Goal methods use the asynchronous REST transport"] = function()
   h.eq(fetched.objective, "ship it")
   h.eq(updated.status, "paused")
   h.eq(cleared, true)
-  h.eq(vim.tbl_map(function(call)
-    return call.method
-  end, calls), { "get", "put", "patch", "delete" })
+  h.eq(
+    vim.tbl_map(function(call)
+      return call.method
+    end, calls),
+    { "get", "put", "patch", "delete" }
+  )
   h.is_true(calls[1].url:find("/v1/sessions/conv_1/codex_goal", 1, true) ~= nil)
   h.eq(vim.json.decode(calls[2].body).objective, "ship it")
 end

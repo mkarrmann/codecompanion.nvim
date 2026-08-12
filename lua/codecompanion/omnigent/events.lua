@@ -290,8 +290,7 @@ function Reducer:handle(event)
     if self._native_pending then
       self._native_turn_started = true
     end
-    updates[#updates + 1] =
-      { kind = "message_delta", response_id = rid, delta = j.delta or "", text = self._text[rid] }
+    updates[#updates + 1] = { kind = "message_delta", response_id = rid, delta = j.delta or "", text = self._text[rid] }
     return updates
   elseif t == "response.reasoning.started" then
     return { { kind = "reasoning_started", response_id = self.current_response_id } }

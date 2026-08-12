@@ -198,8 +198,7 @@ function M.select_model(chat)
     if not models_list then
       return log:debug("No models to select for the omnigent adapter")
     end
-    current_model = chat.omnigent_session
-      and (chat.omnigent_session.model_override or chat.omnigent_session.model)
+    current_model = chat.omnigent_session and (chat.omnigent_session.model_override or chat.omnigent_session.model)
       or nil
   end
 

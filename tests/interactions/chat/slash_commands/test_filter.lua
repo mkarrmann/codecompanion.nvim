@@ -80,11 +80,9 @@ T["reevaluates dynamic chat context"] = function()
   }
   local chat = { command_enabled = false }
 
-  local filtered_before =
-    slash_command_filter.filter_enabled_slash_commands(slash_commands_config, { chat = chat })
+  local filtered_before = slash_command_filter.filter_enabled_slash_commands(slash_commands_config, { chat = chat })
   chat.command_enabled = true
-  local filtered_after =
-    slash_command_filter.filter_enabled_slash_commands(slash_commands_config, { chat = chat })
+  local filtered_after = slash_command_filter.filter_enabled_slash_commands(slash_commands_config, { chat = chat })
 
   h.eq(filtered_before.chat_specific_cmd, nil)
   h.eq(filtered_after.chat_specific_cmd ~= nil, true)

@@ -29,7 +29,7 @@ end
 
 T["decodes JSON null as nil, not vim.NIL"] = function()
   local ev = parse_all(
-    'event: response.output_text.delta\n'
+    "event: response.output_text.delta\n"
       .. 'data: {"type":"response.output_text.delta","delta":"hi","message_id":null,"index":null}\n\n'
   )[1]
   h.eq(ev.type, "response.output_text.delta")
@@ -98,8 +98,7 @@ T["chunk-split feeding yields identical events"] = function()
 end
 
 T["handles CRLF line endings"] = function()
-  local blob = "event: session.status\r\n"
-    .. 'data: {"type": "session.status", "status": "idle"}\r\n\r\n'
+  local blob = "event: session.status\r\n" .. 'data: {"type": "session.status", "status": "idle"}\r\n\r\n'
   local events = parse_all(blob)
   h.eq(#events, 1)
   h.eq(events[1].type, "session.status")

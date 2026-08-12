@@ -5,11 +5,11 @@
 --
 --   nvim --headless --noplugin -u tests/omnigent/minimal_init.lua \
 --     -c "luafile tests/omnigent/live_smoke_compaction_fallback.lua" -c "qa!"
-local client = require("codecompanion.omnigent.client")
-local session = require("codecompanion.omnigent.session")
 local Observer = require("codecompanion.interactions.chat.omnigent.observer")
+local client = require("codecompanion.omnigent.client")
 local compaction = require("codecompanion.interactions.chat.omnigent.compaction")
 local fs = require("tests.omnigent.fake_server")
+local session = require("codecompanion.omnigent.session")
 
 local function log(...)
   print("[fallback]", ...)
@@ -44,21 +44,27 @@ chat.omnigent_session = s
 chat.omnigent_session_id = s.session_id
 
 local observer = Observer.new(chat)
-local wrapped = { handle_update = function(_, u)
-  if u.kind == "turn_completed" then
-    turns = turns + 1
-  end
-  observer:handle_update(u)
-end }
+local wrapped = {
+  handle_update = function(_, u)
+    if u.kind == "turn_completed" then
+      turns = turns + 1
+    end
+    observer:handle_update(u)
+  end,
+}
 s:set_observer(wrapped)
 s:start_stream()
 log("session:", s.session_id)
-vim.wait(4000, function() return false end, 200)
+vim.wait(4000, function()
+  return false
+end, 200)
 
 local function turn(p)
   local before = turns
   s:post_message(p)
-  return vim.wait(240000, function() return turns > before end, 200)
+  return vim.wait(240000, function()
+    return turns > before
+  end, 200)
 end
 
 log("seed turn 1:", tostring(turn("List 8 common HTTP status codes, one per line.")))

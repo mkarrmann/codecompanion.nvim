@@ -139,10 +139,7 @@ end
 ---@param item table
 ---@return string
 function M.tool_name(item)
-  return item.name
-    or item.tool_name
-    or (type(item.tool) == "table" and item.tool.name)
-    or "tool"
+  return item.name or item.tool_name or (type(item.tool) == "table" and item.tool.name) or "tool"
 end
 
 local detail_keys = {
@@ -294,9 +291,7 @@ function M.compaction_marker(info)
       out = out .. "> " .. line .. "\n"
     end
   else
-    out = out
-      .. "> The transcript above is kept for your reference but is no longer in the\n"
-      .. "> agent's context.\n"
+    out = out .. "> The transcript above is kept for your reference but is no longer in the\n" .. "> agent's context.\n"
   end
   return out
 end
