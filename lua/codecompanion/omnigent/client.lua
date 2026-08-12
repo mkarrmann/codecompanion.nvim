@@ -365,6 +365,13 @@ function Client:list_agents()
   return self:_list_all("/v1/agents")
 end
 
+---Async twin of :list_agents.
+---@param opts? table { max_pages?: integer, timeout?: number }
+---@param callback fun(agents: table[]|nil, err: table|nil)
+function Client:list_agents_async(opts, callback)
+  return self:_list_all_async("/v1/agents", nil, opts, callback)
+end
+
 ---@return table[]|nil hosts, table|nil err
 function Client:list_hosts()
   local body, err = self:request("get", "/v1/hosts")
@@ -374,10 +381,31 @@ function Client:list_hosts()
   return body.hosts or body.data or {}
 end
 
+---Async twin of :list_hosts.
+---@param callback fun(hosts: table[]|nil, err: table|nil)
+---@return table|nil request_handle
+function Client:list_hosts_async(callback)
+  return self:request_async("get", "/v1/hosts", nil, function(body, err)
+    if not body then
+      callback(nil, err)
+      return
+    end
+    callback(body.hosts or body.data or {})
+  end)
+end
+
 ---@param body table
 ---@return table|nil session, table|nil err
 function Client:create_session(body)
   return self:request("post", "/v1/sessions", { body = body })
+end
+
+---Async twin of :create_session.
+---@param body table
+---@param callback fun(session: table|nil, err: table|nil)
+---@return table|nil request_handle
+function Client:create_session_async(body, callback)
+  return self:request_async("post", "/v1/sessions", { body = body }, callback)
 end
 
 ---Fork an existing session into a new, unbound session (deep-copies items and
@@ -389,6 +417,20 @@ end
 function Client:fork_session(source_id, body)
   -- vim.empty_dict() so an omitted body serializes as `{}` (object), not `[]`.
   return self:request("post", "/v1/sessions/" .. source_id .. "/fork", { body = body or vim.empty_dict() })
+end
+
+---Async twin of :fork_session.
+---@param source_id string
+---@param body? table
+---@param callback fun(session: table|nil, err: table|nil)
+---@return table|nil request_handle
+function Client:fork_session_async(source_id, body, callback)
+  return self:request_async(
+    "post",
+    "/v1/sessions/" .. source_id .. "/fork",
+    { body = body or vim.empty_dict() },
+    callback
+  )
 end
 
 ---Launch a runner on a host for a session (`POST /v1/hosts/{host_id}/runners`).
@@ -403,10 +445,27 @@ function Client:launch_runner(host_id, body)
   return self:request("post", "/v1/hosts/" .. host_id .. "/runners", { body = body })
 end
 
+---Async twin of :launch_runner.
+---@param host_id string
+---@param body table
+---@param callback fun(result: table|nil, err: table|nil)
+---@return table|nil request_handle
+function Client:launch_runner_async(host_id, body, callback)
+  return self:request_async("post", "/v1/hosts/" .. host_id .. "/runners", { body = body }, callback)
+end
+
 ---@param params? table
 ---@return table[]|nil sessions, table|nil err
 function Client:list_sessions(params)
   return self:_list_all("/v1/sessions", params)
+end
+
+---Async twin of :list_sessions.
+---@param params? table
+---@param opts? table { max_pages?: integer, timeout?: number }
+---@param callback fun(sessions: table[]|nil, err: table|nil)
+function Client:list_sessions_async(params, opts, callback)
+  return self:_list_all_async("/v1/sessions", params, opts, callback)
 end
 
 ---@param session_id string
@@ -415,11 +474,28 @@ function Client:get_session(session_id)
   return self:request("get", "/v1/sessions/" .. session_id)
 end
 
+---Async twin of :get_session.
+---@param session_id string
+---@param callback fun(session: table|nil, err: table|nil)
+---@return table|nil request_handle
+function Client:get_session_async(session_id, callback)
+  return self:request_async("get", "/v1/sessions/" .. session_id, nil, callback)
+end
+
 ---@param session_id string
 ---@param body table
 ---@return table|nil session, table|nil err
 function Client:update_session(session_id, body)
   return self:request("patch", "/v1/sessions/" .. session_id, { body = body })
+end
+
+---Async twin of :update_session.
+---@param session_id string
+---@param body table
+---@param callback fun(session: table|nil, err: table|nil)
+---@return table|nil request_handle
+function Client:update_session_async(session_id, body, callback)
+  return self:request_async("patch", "/v1/sessions/" .. session_id, { body = body }, callback)
 end
 
 ---Fetch durable items, following pagination (fails loudly on any page error).
@@ -491,6 +567,23 @@ function Client:resolve_elicitation(session_id, elicitation_id, result)
     "post",
     "/v1/sessions/" .. session_id .. "/elicitations/" .. elicitation_id .. "/resolve",
     { body = result }
+  )
+end
+
+---Async twin of :resolve_elicitation. This is the tool-approval round trip, the
+---most frequently travelled REST path in a session -- once per gated tool call --
+---so it must never be the thing that freezes the editor.
+---@param session_id string
+---@param elicitation_id string
+---@param result table { action: string, content?: table }
+---@param callback fun(result: table|nil, err: table|nil)
+---@return table|nil request_handle
+function Client:resolve_elicitation_async(session_id, elicitation_id, result, callback)
+  return self:request_async(
+    "post",
+    "/v1/sessions/" .. session_id .. "/elicitations/" .. elicitation_id .. "/resolve",
+    { body = result },
+    callback
   )
 end
 
@@ -600,6 +693,20 @@ function Client:resolve_agent(spec, opts)
     return nil, { message = "No omnigent agent matches '" .. spec .. "'", code = "agent_not_found" }
   end
   return nil, { message = "Multiple omnigent agents named '" .. spec .. "'; specify an id", code = "agent_ambiguous" }
+end
+
+---Async twin of :resolve_agent. Only the agent-list FETCH is async; the matching
+---rules stay in the sync method so there is one definition of them.
+---@param spec string
+---@param callback fun(agent_id: string|nil, err: table|nil)
+function Client:resolve_agent_async(spec, callback)
+  self:list_agents_async(nil, function(agents, err)
+    if not agents then
+      callback(nil, err)
+      return
+    end
+    callback(self:resolve_agent(spec, { agents = agents }))
+  end)
 end
 
 ---Lowercased leading DNS label (host part before the first dot).

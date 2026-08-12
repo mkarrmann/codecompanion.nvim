@@ -249,6 +249,136 @@ T["asynchronous REST failures use normalised errors"] = function()
   h.eq(got.retryable, true)
 end
 
+-- ---- Async twins ----------------------------------------------------------
+--
+-- Every REST verb reachable from a keystroke has an async twin, because the sync
+-- ones run plenary's curl on nvim's main thread. These assert each twin hits the
+-- same endpoint with the same body as its sync counterpart, over `async_request`.
+
+T["async twins hit the same endpoints as their sync counterparts"] = function()
+  local calls = {}
+  local c = client.new({
+    url = "http://host:6767",
+    async_request = function(o)
+      calls[#calls + 1] = o
+      local body
+      if o.url:find("/v1/hosts/", 1, true) then
+        body = { runner_id = "run_1" }
+      elseif o.url:find("/v1/hosts", 1, true) then
+        body = { hosts = { { host_id = "host_mac", name = "MacBook-Pro.local" } } }
+      elseif o.url:find("/v1/agents", 1, true) then
+        body = { data = { { id = "ag_1", name = "claude" } } }
+      else
+        body = { id = "conv_1", status = "idle" }
+      end
+      o.on_complete({ status = 200, body = vim.json.encode(body) })
+      return { stop = function() end }
+    end,
+  })
+
+  local got = {}
+  c:list_hosts_async(function(hosts)
+    got.hosts = hosts
+  end)
+  c:list_agents_async(nil, function(agents)
+    got.agents = agents
+  end)
+  c:create_session_async({ agent_id = "ag_1" }, function(s)
+    got.created = s
+  end)
+  c:get_session_async("conv_1", function(s)
+    got.fetched = s
+  end)
+  c:fork_session_async("conv_1", { title = "branch" }, function(s)
+    got.forked = s
+  end)
+  c:launch_runner_async("host_mac", { session_id = "conv_2" }, function(r)
+    got.launched = r
+  end)
+  c:resolve_elicitation_async("conv_1", "e1", { action = "accept" }, function(r)
+    got.resolved = r
+  end)
+
+  h.eq(got.hosts[1].host_id, "host_mac")
+  h.eq(got.agents[1].id, "ag_1")
+  h.eq(got.created.id, "conv_1")
+  h.eq(got.fetched.id, "conv_1")
+  h.eq(got.forked.id, "conv_1")
+  h.eq(got.launched.runner_id, "run_1")
+  h.is_true(got.resolved ~= nil)
+
+  local paths = vim.tbl_map(function(o)
+    return o.method .. " " .. o.url:gsub("^http://host:6767", "")
+  end, calls)
+  h.eq(paths, {
+    "get /v1/hosts",
+    "get /v1/agents",
+    "post /v1/sessions",
+    "get /v1/sessions/conv_1",
+    "post /v1/sessions/conv_1/fork",
+    "post /v1/hosts/host_mac/runners",
+    "post /v1/sessions/conv_1/elicitations/e1/resolve",
+  })
+end
+
+T["list_sessions_async follows pagination without blocking"] = function()
+  local pages = {
+    { data = { { id = "conv_1" } }, has_more = true, last_id = "conv_1" },
+    { data = { { id = "conv_2" } }, has_more = false },
+  }
+  local seen_after = {}
+  local c = client.new({
+    async_request = function(o)
+      seen_after[#seen_after + 1] = o.url:match("after=([^&]+)") or "<none>"
+      o.on_complete({ status = 200, body = vim.json.encode(table.remove(pages, 1)) })
+      return { stop = function() end }
+    end,
+  })
+  local got
+  c:list_sessions_async({ limit = 2 }, nil, function(list)
+    got = list
+  end)
+  h.eq(#got, 2)
+  h.eq(got[2].id, "conv_2")
+  h.eq(seen_after, { "<none>", "conv_1" })
+end
+
+T["resolve_agent_async fetches the list, then applies the sync matching rules"] = function()
+  local c = client.new({
+    async_request = function(o)
+      o.on_complete({
+        status = 200,
+        body = vim.json.encode({ data = { { id = "ag_1", name = "claude" }, { id = "ag_2", name = "claude" } } }),
+      })
+      return { stop = function() end }
+    end,
+  })
+  local matched, ambiguous
+  c:resolve_agent_async("ag_1", function(id)
+    matched = id
+  end)
+  c:resolve_agent_async("claude", function(_, err)
+    ambiguous = err
+  end)
+  h.eq(matched, "ag_1")
+  h.eq(ambiguous.code, "agent_ambiguous")
+end
+
+T["resolve_agent_async surfaces a failed fetch"] = function()
+  local c = client.new({
+    async_request = function(o)
+      o.on_complete({ status = 503, body = '{"error":{"message":"down"}}' })
+      return { stop = function() end }
+    end,
+  })
+  local got
+  c:resolve_agent_async("claude", function(id, err)
+    got = { id = id, err = err }
+  end)
+  h.eq(got.id, nil)
+  h.eq(got.err.status, 503)
+end
+
 -- ---- Fork + runner launch -------------------------------------------------
 
 T["fork_session posts to the fork endpoint with the body"] = function()
