@@ -215,7 +215,7 @@ local function create_entry_buf(t, entry)
   end, { buffer = buf, desc = "Drop this queued message" })
   vim.keymap.set({ "n", "i" }, keys.steer, function()
     steer_entry(t, id)
-  end, { buffer = buf, desc = "Send this message now, ahead of the queue" })
+  end, { buffer = buf, desc = "Send this message next (steer the running turn where supported)" })
 
   return buf
 end
@@ -241,20 +241,20 @@ end
 local QUEUED_HL = "Normal:CCQueuedNormal,EndOfBuffer:CCQueuedNormal,WinSeparator:CCQueuedBorder"
 local HELD_HL = "Normal:CCHeldNormal,EndOfBuffer:CCHeldNormal,WinSeparator:CCHeldBorder"
 
--- What the steer key is honestly offering, which depends on the harness.
+-- What the send-next key is offering here, which depends on the harness.
 --
--- Only "send it now instead of waiting your turn in the queue" is guaranteed:
--- whether the agent is interrupted mid-thought or picks the message up as its
--- next turn is the harness's business, and omnigent declares a `steering`
--- capability that (today) no harness populates. Promising interruption when the
--- harness cannot deliver it is how you end up mistrusting the whole affordance.
+-- "steer" only where a mid-turn post is actually folded into the running turn
+-- (see Session:can_steer). Everywhere else it moves the message to the head of
+-- the queue, which is still "this one goes next" -- just at the next turn
+-- boundary. Promising interruption a harness cannot deliver is how you end up
+-- mistrusting the whole affordance.
 local function steer_verb(s)
   local chat = s.chat_bufnr and require("codecompanion").buf_get_chat(s.chat_bufnr)
   local session = chat and chat.omnigent_session
-  if session and session.steering_support and session:steering_support() == "supported" then
+  if session and session.can_steer and session:can_steer() then
     return "steer"
   end
-  return "send now"
+  return "send next"
 end
 
 local function paint_entry_labels(s)
@@ -264,7 +264,13 @@ local function paint_entry_labels(s)
   for i, e in ipairs(s.queue) do
     if entry_win_valid(e) then
       local label, hl
-      if entry_dirty(e) then
+      if e.sending then
+        -- In flight but not gone: the send may still be waiting for a moment
+        -- when the runner will fold it into the turn, and it goes back to
+        -- "queued" if the POST fails.
+        label = string.format("%%#DiagnosticInfo# ↑ %d/%d sending…%%*", i, n)
+        hl = HELD_HL
+      elseif entry_dirty(e) then
         label = string.format(
           "%%#DiagnosticWarn# ✎ %d/%d editing %%#Comment#— %s commit · %s drop · %s %s%%*",
           i,
@@ -633,7 +639,9 @@ end
 -- from jumping ahead of it.
 local function flush_head(s)
   local e = s.queue[1]
-  if not e or entry_dirty(e) then
+  -- `sending` as well as dirty: a head already on its way out must not be
+  -- submitted a second time by the flush.
+  if not e or e.sending or entry_dirty(e) then
     return false
   end
   if not submit_to_chat(s.chat_bufnr, e.text) then
@@ -767,15 +775,35 @@ function drop_entry(t, id)
   sync_queue_ui(s)
 end
 
--- Hand off to the omnigent handler's steer primitive, which owns the semantics
--- (posting into the active turn rather than starting a new one, the `\cmd` →
--- `/cmd` wire rewrite, and writing the message into the transcript so a steer
--- isn't invisible). Failures render into the chat, so there is nothing to
--- report here beyond the refusals this side knows about.
-local function steer_post(s, text)
-  local chat = require("codecompanion").buf_get_chat(s.chat_bufnr)
+-- How <C-CR> should deliver `text` right now.
+--
+--   "submit"  nothing is running, so this is an ordinary send
+--   "steer"   a turn is running AND this harness folds a mid-turn post into it
+--   "queue"   a turn is running and it does not -- posting out of band would buy
+--             a few hundred milliseconds and cost the whole foreground render
+--             path (no RequestStarted, so no timer, and the reply arrives after
+--             the handler has detached, landing on the background observer
+--             below an orphaned `## Me`). Putting it at the head of the queue
+--             gets the same message into the same next turn, rendered properly.
+local function send_now_mode(s, chat)
+  if not chat_busy(s, chat) then
+    return "submit"
+  end
+  local session = chat.omnigent_session
+  if session and session.can_steer and session:can_steer() then
+    return "steer"
+  end
+  return "queue"
+end
+
+-- Post `text` into the turn that is already running.
+--
+-- `on_sent` fires when the POST settles, not when it is accepted -- the wait for
+-- a steerable moment can outlive this call, and the caller must not throw the
+-- text away before it is actually gone.
+local function steer_post(s, chat, text, on_sent)
   local handler = require("codecompanion.interactions.chat.omnigent.handler")
-  local ok, err = handler.steer(chat, text)
+  local ok, err = handler.steer(chat, text, on_sent)
   if not ok then
     vim.notify("Cannot steer: " .. tostring(err), vim.log.levels.WARN)
     return false
@@ -783,10 +811,33 @@ local function steer_post(s, text)
   return true
 end
 
--- Steer from an entry buffer: send this message *now*, into the turn that is
--- already running, instead of waiting its turn in the queue. Deliberately jumps
--- the queue -- it is the one action here that breaks FIFO, which is why it is a
--- different key from commit.
+-- Move an entry to the front so it is the next thing flushed.
+--
+-- Drops every entry window on the way out. `sync_entries` only creates the ones
+-- that are missing -- deliberately, so an entry being edited is never rebuilt
+-- under the cursor -- which means a surviving window keeps its old position and
+-- the stack stops matching flush order. Rebuilding the whole stack is the only
+-- thing that keeps "top of the stack goes next" true.
+local function move_to_head(s, i)
+  if i <= 1 then
+    return false
+  end
+  table.insert(s.queue, 1, table.remove(s.queue, i))
+  close_entry_windows(s)
+  return true
+end
+
+-- Send this entry next rather than waiting its turn. Deliberately jumps the
+-- FIFO -- it is the one action here that does, which is why it is a different
+-- key from commit. Whether that means steering the running turn or moving to the
+-- head of the queue depends on the harness; either way "next" is what it means.
+--
+-- On the steer path the entry is held (marked "sending") until the POST lands,
+-- and restored if it fails: the wait for a steerable moment can outlive this
+-- call, so dropping it on acceptance would lose the text in that window.
+--
+-- An uncommitted edit is adopted first. Asking to send a message you have just
+-- retyped can only mean the retyped version.
 function steer_entry(t, id)
   local s = states[t]
   if not s then
@@ -799,19 +850,55 @@ function steer_entry(t, id)
 
   local text = entry_buf_text(e)
   if text == "" then
-    vim.notify("Nothing to steer", vim.log.levels.INFO)
+    vim.notify("Nothing to send", vim.log.levels.INFO)
     return
   end
-  if not steer_post(s, text) then
+  e.text = text
+
+  local chat = require("codecompanion").buf_get_chat(s.chat_bufnr)
+  if not chat then
+    vim.notify("CodeCompanion chat is closed", vim.log.levels.WARN)
     return
   end
 
-  remove_entry(s, i)
-  focus_input(s)
+  local mode = send_now_mode(s, chat)
+  if mode ~= "steer" then
+    if not move_to_head(s, i) then
+      vim.notify("Already next in the queue", vim.log.levels.INFO)
+    end
+    sync_queue_ui(s)
+    if mode == "submit" then
+      flush_head(s)
+    end
+    return
+  end
+
+  e.sending = true
   sync_queue_ui(s)
+  local accepted = steer_post(s, chat, text, function(sent)
+    local st = states[t]
+    if not st then
+      return
+    end
+    local idx, entry = find_entry(st, id)
+    if not entry then
+      return
+    end
+    entry.sending = false
+    if sent then
+      remove_entry(st, idx)
+      focus_input(st)
+    end
+    sync_queue_ui(st)
+  end)
+  if not accepted then
+    e.sending = false
+    sync_queue_ui(s)
+  end
 end
 
--- Steer from the input box: don't queue this behind the running turn, inject it.
+-- Send the draft next instead of behind everything already queued. Same
+-- three-way as an entry; the draft is kept until the send actually lands.
 function steer_draft(t)
   local s = states[t]
   if not s then
@@ -819,14 +906,37 @@ function steer_draft(t)
   end
   local text = get_draft_text(s)
   if not text then
-    vim.notify("Nothing to steer", vim.log.levels.INFO)
+    vim.notify("Nothing to send", vim.log.levels.INFO)
     return
   end
-  if not steer_post(s, text) then
+  local chat = require("codecompanion").buf_get_chat(s.chat_bufnr)
+  if not chat then
+    vim.notify("CodeCompanion chat is closed", vim.log.levels.WARN)
     return
   end
-  push_history(text)
-  clear_draft_buf(s)
+
+  local mode = send_now_mode(s, chat)
+  if mode == "submit" then
+    submit_now(s, text)
+    return
+  end
+  if mode == "queue" then
+    local e = push_entry(s, t, text)
+    move_to_head(s, #s.queue)
+    push_history(text)
+    clear_draft_buf(s)
+    sync_queue_ui(s)
+    return e
+  end
+
+  steer_post(s, chat, text, function(sent)
+    local st = states[t]
+    if not (st and sent) then
+      return
+    end
+    push_history(text)
+    clear_draft_buf(st)
+  end)
 end
 
 -- Hop into the most recently queued message. Just a shortcut -- the entries are
@@ -876,7 +986,7 @@ local function create_input_buf(t)
   end, { buffer = buf, desc = "Jump to the newest queued message" })
   vim.keymap.set({ "n", "i" }, keys.steer, function()
     steer_draft(t)
-  end, { buffer = buf, desc = "Send the draft now, ahead of the queue" })
+  end, { buffer = buf, desc = "Send the draft next (steer the running turn where supported)" })
 
   -- Edge-triggered history navigation: the history keys browse prompt history
   -- only at the first/last line, and otherwise fall through to ordinary cursor

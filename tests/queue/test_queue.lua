@@ -207,6 +207,69 @@ T["dropping an entry discards it without sending"] = function()
   h.eq(#ctx.submitted, 0)
 end
 
+-- On a harness that cannot fold a mid-turn post into the running turn, the send
+-- key must NOT post out of band -- it moves the message to the head of the queue
+-- so it goes out through the ordinary submit path on the next flush.
+T["send-next moves an entry to the head when the harness cannot steer"] = function()
+  local ctx = open_chat() -- fake chat has no omnigent_session -> cannot steer
+  queue.on_request_started(ctx.chat_bufnr, 1)
+  enqueue(ctx, { "first", "second", "third" })
+
+  press(entry_stack(ctx.tab)[3].buf, keys().steer)
+  h.eq(#ctx.submitted, 0) -- nothing posted out of band
+
+  local stack = entry_stack(ctx.tab)
+  h.eq(vim.api.nvim_buf_get_lines(stack[1].buf, 0, -1, false)[1], "third")
+  h.eq(#stack, 3)
+
+  -- ...and it is what the next flush sends.
+  queue.on_request_finished(ctx.chat_bufnr, 1, "success")
+  queue.on_chat_done(ctx.chat_bufnr)
+  h.eq(ctx.submitted[#ctx.submitted], "third")
+end
+
+T["send-next adopts an uncommitted edit before promoting"] = function()
+  local ctx = open_chat()
+  queue.on_request_started(ctx.chat_bufnr, 1)
+  enqueue(ctx, { "first", "second" })
+
+  local stack = entry_stack(ctx.tab)
+  edit_entry(stack[2].buf, "second EDITED")
+  press(stack[2].buf, keys().steer)
+
+  queue.on_request_finished(ctx.chat_bufnr, 1, "success")
+  queue.on_chat_done(ctx.chat_bufnr)
+  h.eq(ctx.submitted[#ctx.submitted], "second EDITED")
+end
+
+T["send-next on an idle chat submits instead of queueing"] = function()
+  local ctx = open_chat()
+  queue.on_request_started(ctx.chat_bufnr, 1)
+  enqueue(ctx, { "first" })
+  queue.on_request_finished(ctx.chat_bufnr, 1, "success")
+
+  -- Nothing is running, so there is no turn to steer into and nothing to wait
+  -- for: it goes out now.
+  press(entry_stack(ctx.tab)[1].buf, keys().steer)
+  h.eq(ctx.submitted[#ctx.submitted], "first")
+  h.eq(#entry_stack(ctx.tab), 0)
+end
+
+T["send-next from the input box puts the draft at the head"] = function()
+  local ctx = open_chat()
+  queue.on_request_started(ctx.chat_bufnr, 1)
+  enqueue(ctx, { "first", "second" })
+
+  vim.api.nvim_buf_set_lines(ctx.input, 0, -1, false, { "urgent" })
+  press(ctx.input, keys().steer)
+  h.eq(#ctx.submitted, 0)
+
+  local stack = entry_stack(ctx.tab)
+  h.eq(#stack, 3)
+  h.eq(vim.api.nvim_buf_get_lines(stack[1].buf, 0, -1, false)[1], "urgent")
+  h.eq(vim.api.nvim_buf_get_lines(ctx.input, 0, -1, false)[1], "")
+end
+
 T["hiding the chat keeps the queue and any uncommitted edit"] = function()
   local ctx = open_chat()
   queue.on_request_started(ctx.chat_bufnr, 1)
