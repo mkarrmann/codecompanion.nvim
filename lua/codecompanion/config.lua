@@ -1337,6 +1337,27 @@ The user is working on a %s machine. Please respond with system specific command
         },
       },
     },
+    -- Per-tab input box + message queue (see interactions/chat/queue). Every
+    -- mapping here applies in both normal and insert mode, so a single lhs
+    -- string is enough -- unlike `display.input.keymaps`, which needs the
+    -- per-mode table because its bindings differ between modes.
+    queue = {
+      input_height = 8, -- Rows in the input box at rest
+      status_max_rows = 6, -- Cap on the status line's soft-wrapped height
+      entry_max_rows = 4, -- Cap on any one queued message's window
+      entry_stack_ratio = 1 / 3, -- Share of the screen the whole entry stack may take
+      history_limit = 200, -- Prompts kept in the session-scoped history ring
+      keymaps = {
+        send = "<C-s>", -- Input box: submit now, or append to the queue
+        steer = "<C-CR>", -- Input box / entry: post into the running turn
+        fullscreen = "<C-g>", -- Input box: toggle full-height
+        focus_newest = "<C-q>", -- Input box: jump to the newest queued entry
+        history_prev = "<Up>",
+        history_next = "<Down>",
+        commit = "<C-s>", -- Entry: adopt the edit and release the hold
+        drop = "<C-d>", -- Entry: discard the message
+      },
+    },
   },
   -- EXTENSIONS ------------------------------------------------------
   extensions = {},
@@ -1371,6 +1392,11 @@ The user is working on a %s machine. Please respond with system specific command
 
 local M = {
   config = vim.deepcopy(defaults),
+  -- The shipped defaults, exposed so a caller can recover a known-good value
+  -- for a key. Tests need this: `Helpers.setup_chat_buffer` replaces `setup`
+  -- with one that assigns its argument verbatim, so from then on `M.config`
+  -- holds only whatever that test passed and every other key is gone.
+  defaults = defaults,
 }
 
 ---Check the cwd for any per-project configuration files and load them if they exist
