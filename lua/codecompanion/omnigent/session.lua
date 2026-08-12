@@ -652,6 +652,10 @@ end
 ---Fold a normalised update into local state (status/model/usage tracking).
 ---@param u CodeCompanion.Omnigent.Update
 function Session:_apply_state(u)
+  -- Before the per-kind fold: a deferred steer is waiting on exactly these
+  -- signals, and `input_consumed` is also handled below for a different reason.
+  self:_maybe_release_input(u.kind)
+
   if u.kind == "status" then
     self.status = u.status or self.status
   elseif
@@ -1008,6 +1012,7 @@ function Session:post_message(text)
   })
   if result and result.pending_id then
     self.reducer:expect_input(result.pending_id)
+    self._input_pending = true
   end
   return result, err
 end
@@ -1031,11 +1036,112 @@ function Session:post_message_async(text, callback)
   }, function(result, err)
     if result and result.pending_id then
       self.reducer:expect_input(result.pending_id)
+      self._input_pending = true
     end
     if callback then
       callback(result, err)
     end
   end)
+end
+
+---How long to hold a steer waiting for the previous input to be consumed.
+---Generous: the runner normally picks input up in well under a second, so
+---reaching this means something unusual happened and posting late beats not
+---posting at all.
+local INPUT_READY_TIMEOUT_MS = 10000
+
+---True while a posted message is sitting in the server's pending-input buffer,
+---un-consumed by the runner.
+---
+---Only native-terminal harnesses (claude-native / codex-native) park input this
+---way -- they are the ones that answer a post with a `pending_id` -- so this is
+---false throughout on the SDK harnesses, which is correct: they have no such
+---buffer to merge into.
+---@return boolean
+function Session:input_pending()
+  return self._input_pending == true
+end
+
+---Run `fn` once the server has no un-consumed input left, i.e. once a message
+---posted now would reach a *running* turn rather than joining the batch that
+---has yet to start one.
+---
+---This is what separates steering from editing your own prompt. Both are the
+---same POST -- omnigent has no steer flag -- so the only thing that decides
+---whether a message interrupts the agent or is silently concatenated onto the
+---previous one is whether the runner has picked the previous one up yet.
+---
+---`fn` is called synchronously when nothing is pending, so the common case adds
+---no latency. `reason` says why it ran: "ready" (nothing was pending),
+---"consumed" (the runner took the previous input), "turn_ended" (the turn died
+---first, so the wait can never be satisfied), or "timeout".
+---@param fn fun(reason: string)
+function Session:when_input_ready(fn)
+  if not self._input_pending then
+    return fn("ready")
+  end
+  local waiter = { fn = fn }
+  self._input_waiters = self._input_waiters or {}
+  table.insert(self._input_waiters, waiter)
+  vim.defer_fn(function()
+    if waiter.fired then
+      return
+    end
+    -- Give up tracking rather than hold the text hostage to an event that may
+    -- never arrive. Worst case the post merges, which is where we started.
+    self._input_pending = false
+    self:_fire_input_waiter(waiter, "timeout")
+  end, INPUT_READY_TIMEOUT_MS)
+end
+
+---@param waiter table
+---@param reason string
+function Session:_fire_input_waiter(waiter, reason)
+  if waiter.fired then
+    return
+  end
+  waiter.fired = true
+  for i, w in ipairs(self._input_waiters or {}) do
+    if w == waiter then
+      table.remove(self._input_waiters, i)
+      break
+    end
+  end
+  waiter.fn(reason)
+end
+
+---Release waiters on any signal that the pending input is gone -- consumed by
+---the runner, or moot because the turn it belonged to ended.
+---@param kind string
+function Session:_maybe_release_input(kind)
+  if not self._input_pending and not self._input_waiters then
+    return
+  end
+  if kind == "input_consumed" then
+    return self:_release_input_waiters("consumed")
+  end
+  if kind == "turn_completed" or kind == "turn_failed" or kind == "turn_cancelled" or kind == "interrupted" then
+    self:_release_input_waiters("turn_ended")
+  end
+end
+
+---Clear the pending-input flag and run everything waiting on it. Detaches the
+---list first: a waiter is free to post, which can re-arm the flag and enqueue
+---the next one.
+---@param reason string
+function Session:_release_input_waiters(reason)
+  self._input_pending = false
+  local waiters = self._input_waiters
+  if not waiters then
+    return
+  end
+  self._input_waiters = nil
+  for _, waiter in ipairs(waiters) do
+    if not waiter.fired then
+      waiter.fired = true
+      waiter.fn(reason)
+    end
+  end
 end
 
 ---Interrupt the active turn (does NOT stop or delete the session).

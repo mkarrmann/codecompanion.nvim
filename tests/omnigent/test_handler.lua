@@ -26,7 +26,13 @@ local function router(cap)
       return { status = 200, body = vim.json.encode({ hosts = cap.hosts or {} }) }
     elseif m == "post" and url:find("/events", 1, true) then
       cap.event = o
-      return { status = 202, body = vim.json.encode({ queued = true, item_id = "msg_x" }) }
+      -- `cap.pending` models a native-terminal harness, which parks a posted
+      -- message in the server's pending-input buffer and answers with its id.
+      -- SDK harnesses answer without one.
+      return {
+        status = 202,
+        body = vim.json.encode({ queued = true, item_id = "msg_x", pending_id = cap.pending }),
+      }
     elseif m == "post" and url:find("/v1/sessions", 1, true) then
       cap.create = o
       return { status = 200, body = vim.json.encode({ id = "conv_1", status = "idle" }) }
@@ -58,7 +64,12 @@ local function fake_chat(adapter, sess)
     done_call = nil,
     current_request = nil,
     add_buf_message = function(self, msg, opts)
-      table.insert(self.buf_calls, { content = msg.content, type = opts and opts.type, role = msg.role })
+      table.insert(self.buf_calls, {
+        content = msg.content,
+        type = opts and opts.type,
+        role = msg.role,
+        force_role = opts and opts.force_role,
+      })
       return #self.buf_calls
     end,
     add_message = function(self, msg, opts)
@@ -426,6 +437,82 @@ T["steer posts into the running turn and renders it"] = function()
 
   -- Not counted as assistant output.
   h.eq(table.concat(handler.output), "")
+end
+
+-- A header is only emitted on a role CHANGE, and the line above a steer is
+-- almost always the user's own submit. Without force_role the steer is written
+-- into that same `## Me` block and reads as an edit, not a new message.
+T["steer opens its own user block instead of appending to the last one"] = function()
+  local chat, handler = setup({})
+  handler:submit({})
+  OmnigentHandler.steer(chat, "actually, use tabs")
+  h.eq(chat.buf_calls[#chat.buf_calls].force_role, true)
+end
+
+T["a user item arriving mid-turn opens its own block too"] = function()
+  local chat, handler = setup({})
+  handler:submit({})
+  handler:_render_item({ item_type = "message", role = "user", text = "from another client" })
+  h.eq(chat.buf_calls[#chat.buf_calls].force_role, true)
+end
+
+-- Posting into an un-consumed pending input does not steer: the server hands
+-- the runner one combined input, so the agent never sees two messages. This is
+-- exactly the "submit, then immediately steer" case.
+T["steer waits for the pending input to be consumed before posting"] = function()
+  local chat, handler, cap = setup({ pending = "pi_1" })
+  handler:submit({})
+  cap.event = nil
+  local before = #chat.buf_calls
+
+  OmnigentHandler.steer(chat, "actually, use tabs")
+  h.eq(cap.event, nil)
+  -- Nothing rendered yet either: a message in the transcript has to mean the
+  -- agent received it.
+  h.eq(#chat.buf_calls, before)
+
+  chat.omnigent_session:_apply_state({ kind = "input_consumed", item_id = "msg_1" })
+  h.eq(vim.json.decode(cap.event.body).data.content[1].text, "actually, use tabs")
+  h.eq(chat.buf_calls[#chat.buf_calls].content, "actually, use tabs")
+end
+
+T["a turn ending releases a steer that was still waiting"] = function()
+  local chat, handler, cap = setup({ pending = "pi_1" })
+  handler:submit({})
+  cap.event = nil
+
+  OmnigentHandler.steer(chat, "actually, use tabs")
+  h.eq(cap.event, nil)
+  -- The wait can never be satisfied now, and holding the text is worse than
+  -- posting it late.
+  chat.omnigent_session:_apply_state({ kind = "turn_cancelled" })
+  h.eq(vim.json.decode(cap.event.body).data.content[1].text, "actually, use tabs")
+end
+
+T["a second steer waits behind the first"] = function()
+  local chat, handler, cap = setup({ pending = "pi_1" })
+  handler:submit({})
+
+  OmnigentHandler.steer(chat, "one")
+  chat.omnigent_session:_apply_state({ kind = "input_consumed", item_id = "msg_1" })
+  h.eq(vim.json.decode(cap.event.body).data.content[1].text, "one")
+
+  cap.event = nil
+  OmnigentHandler.steer(chat, "two")
+  h.eq(cap.event, nil)
+  chat.omnigent_session:_apply_state({ kind = "input_consumed", item_id = "msg_2" })
+  h.eq(vim.json.decode(cap.event.body).data.content[1].text, "two")
+end
+
+T["steer posts straight away when nothing is pending"] = function()
+  local chat, handler, cap = setup({})
+  handler:submit({})
+  cap.event = nil
+  -- No pending_id in the response means an SDK harness: no pending-input buffer
+  -- exists to merge into, so there is nothing to wait for.
+  h.eq(chat.omnigent_session:input_pending(), false)
+  OmnigentHandler.steer(chat, "actually, use tabs")
+  h.eq(vim.json.decode(cap.event.body).data.content[1].text, "actually, use tabs")
 end
 
 T["steer rewrites an agent command on the wire only"] = function()
