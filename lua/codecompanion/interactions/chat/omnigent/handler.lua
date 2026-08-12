@@ -92,6 +92,11 @@ function OmnigentHandler:ensure_session_async(opts, callback)
 
   local function ready()
     chat.omnigent_session_id = session.session_id
+    -- Fire-and-forget: only the steer affordance's wording depends on it, and
+    -- that reads "unknown" happily until the answer lands.
+    pcall(function()
+      session:fetch_harness_capabilities()
+    end)
     if chat.update_metadata then
       pcall(function()
         chat:update_metadata()
@@ -408,6 +413,10 @@ function OmnigentHandler:on_update(u)
   local MT = self.chat.MESSAGE_TYPES
   local k = u.kind
 
+  if self._adopted then
+    self:_ensure_request_started(u)
+  end
+
   if k == "message_delta" then
     table.insert(self.output, u.delta)
     self.chat:add_buf_message({ role = C.LLM_ROLE, content = u.delta }, { type = MT.LLM_MESSAGE })
@@ -615,10 +624,23 @@ function OmnigentHandler.steer(chat, text)
       log:warn("[Omnigent::Handler] steering without a running turn to steer (%s)", reason)
     end
 
+    -- Claim the turn this produces. Whether the harness injects it into the
+    -- running turn or runs it as the next one, the user typed it and is waiting
+    -- on it, so it must render as a foreground turn rather than fall through to
+    -- the observer as someone else's background activity.
+    session:expect_adopted_turn()
+    -- With a turn in flight the claim is redeemed by its handler's `_complete`.
+    -- With none there is no such handler, so redeem it now.
+    if not session.callbacks.on_update then
+      session:take_adopted_turn()
+      OmnigentHandler.adopt(chat)
+    end
+
     session:post_message_async(wire, function(res, perr)
       if not res then
         local msg = type(perr) == "table" and (perr.message or vim.inspect(perr)) or tostring(perr)
         log:error("[Omnigent::Handler] steer failed: %s", msg)
+        session:take_adopted_turn() -- nothing was posted, so no turn is coming
         chat:add_buf_message(
           { role = C.LLM_ROLE, content = "\n> [!WARNING] Steer failed: " .. msg .. "\n" },
           { type = MT.SYSTEM_MESSAGE or MT.LLM_MESSAGE }
@@ -638,6 +660,75 @@ function OmnigentHandler.steer(chat, text)
     post("ready")
   end
   return true
+end
+
+---Bind a fresh foreground handler for a turn the user caused but did not submit
+---through the chat buffer -- i.e. the turn a steer produces.
+---
+---Without this the turn lands on the observer, which renders it as "Omnigent
+---background activity" behind the empty `## Me` that the previous turn's
+---`ready_for_input` just wrote. That is wrong twice over: it is not background
+---(the user typed it and is waiting on it), and it strands an input anchor
+---mid-transcript.
+---
+---`RequestStarted` is deliberately NOT fired here. Adoption happens before the
+---turn exists, and a turn that never arrives -- the harness folded the message
+---into the turn that just ended, say -- must not leave the queue believing a
+---request is in flight forever. The first update that proves a turn is running
+---fires it instead (see `_ensure_request_started`).
+---@param chat CodeCompanion.Chat
+---@return CodeCompanion.Chat.OmnigentHandler|nil
+function OmnigentHandler.adopt(chat)
+  local session = chat and chat.omnigent_session
+  if not session then
+    return nil
+  end
+  local handler = OmnigentHandler.new(chat)
+  handler._adopted = true
+  handler._on_update = function(u)
+    handler:on_update(u)
+  end
+  handler._on_error = function(e)
+    handler:on_error(e)
+  end
+  handler._on_stream_end = function(code)
+    handler:on_stream_end(code)
+  end
+  session.callbacks.on_update = handler._on_update
+  session.callbacks.on_error = handler._on_error
+  session.callbacks.on_stream_end = handler._on_stream_end
+  return handler
+end
+
+-- Updates that prove a turn is actually running, as opposed to trailing events
+-- from the turn that just ended. An adopted handler stays silent until one
+-- arrives, so it never announces a request that does not exist.
+local TURN_IS_LIVE = {
+  turn_started = true,
+  message_delta = true,
+  reasoning_delta = true,
+  tool_output_delta = true,
+  item_committed = true,
+  elicitation = true,
+}
+
+---Announce the request lifecycle for an adopted turn, once, on first evidence
+---that it started. A submitted turn has already done this in `submit`.
+---@param u CodeCompanion.Omnigent.Update
+function OmnigentHandler:_ensure_request_started(u)
+  if self.request_id or not TURN_IS_LIVE[u.kind] then
+    return
+  end
+  self.request_id = tostring(math.random(10000000))
+  utils.fire("RequestStarted", {
+    id = self.request_id,
+    bufnr = self.chat.bufnr,
+    adapter = {
+      name = self.chat.adapter.name,
+      formatted_name = self.chat.adapter.formatted_name,
+      type = "omnigent",
+    },
+  })
 end
 
 ---@param err table|string
@@ -687,6 +778,15 @@ function OmnigentHandler:_complete(status)
   self._done = true
   self:_detach()
   self:_settle()
+
+  -- An adopted handler whose turn never materialised announced no request, so
+  -- it must not announce an ending either -- and it has no output to commit.
+  -- Reached when the harness folds a steered message into the turn that was
+  -- already ending instead of starting a new one.
+  if self._adopted and not self.request_id then
+    return
+  end
+
   if not self.chat.status or self.chat.status == "" then
     self.chat.status = status
   end
@@ -697,7 +797,17 @@ function OmnigentHandler:_complete(status)
       status = self.chat.status,
     })
   end
-  self.chat:done(self.output, self.reasoning, {})
+
+  -- A message posted mid-turn means another turn is on its way. Claim it here,
+  -- while we still own the stream, and tell `done` to leave the interaction
+  -- open: the input anchor would otherwise be stranded above the incoming turn,
+  -- and ChatDone would flush the queue straight into it.
+  local session = self.chat.omnigent_session
+  local continues = (session and session:take_adopted_turn()) or false
+  if continues then
+    OmnigentHandler.adopt(self.chat)
+  end
+  self.chat:done(self.output, self.reasoning, {}, nil, { turn_continues = continues })
 end
 
 ---@param err table|string
