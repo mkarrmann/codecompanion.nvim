@@ -557,6 +557,15 @@ local function submit_to_chat(chat_bufnr, text)
     return false
   end
 
+  -- `Chat:submit` refuses outright while a request is in flight, and it refuses
+  -- SILENTLY (a debug log, no return value). Writing the text in first and
+  -- discovering that afterwards is how a message ends up visible in the buffer,
+  -- cleared from the input box, and never sent. Refuse before touching the
+  -- buffer so the caller can queue it instead.
+  if chat.current_request then
+    return false
+  end
+
   -- Callers may keep the chat buffer non-modifiable at rest so it can't be
   -- hand-edited. Unlock it for this programmatic write; chat:submit() re-locks
   -- when the request starts and Chat:reset re-locks when the turn ends.
@@ -666,6 +675,19 @@ end
 -- adapters have no session and fall back to the foreground flag alone.
 local function chat_busy(s, chat)
   if s.in_flight_id then
+    return true
+  end
+  -- Covers the gap the other two signals leave. `chat:submit()` sets
+  -- `current_request` synchronously, but `in_flight_id` waits on RequestStarted
+  -- (fired only after the session has been ensured -- a round trip or three) and
+  -- `session:busy()` waits on the server reporting "running". For that window
+  -- the chat looked idle, so a second send went straight down the submit path,
+  -- where Chat:submit silently refused it and the text was lost.
+  --
+  -- Only ever OR-ed in: `current_request` is cleared synchronously by
+  -- `Chat:stop()` while the finish handler runs later, so on its own it would
+  -- read idle mid-cancellation. `in_flight_id` covers that direction.
+  if chat and chat.current_request then
     return true
   end
   local session = chat and chat.omnigent_session

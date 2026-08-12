@@ -111,7 +111,7 @@ local function open_chat()
   end
 
   queue.on_chat_opened(chat_buf)
-  return { tab = tab, chat_bufnr = chat_buf, input = queue.bufnr(), submitted = submitted }
+  return { tab = tab, chat_bufnr = chat_buf, input = queue.bufnr(), submitted = submitted, chat = chat }
 end
 
 ---Queue `msgs` through the input box. The chat must already be busy, or the
@@ -310,6 +310,44 @@ T["send-next from the input box puts the draft at the head"] = function()
   h.eq(#stack, 3)
   h.eq(vim.api.nvim_buf_get_lines(stack[1].buf, 0, -1, false)[1], "urgent")
   h.eq(vim.api.nvim_buf_get_lines(ctx.input, 0, -1, false)[1], "")
+end
+
+-- `Chat:submit` refuses while a request is in flight, and refuses silently. The
+-- queue therefore must not route a send down the submit path in that state --
+-- the message would be spliced into the buffer, cleared from the input box, and
+-- never sent. This is the window between `chat:submit()` (which sets
+-- current_request at once) and RequestStarted (which sets in_flight_id later).
+T["a send lands in the queue while a request is in flight"] = function()
+  local ctx = open_chat()
+  ctx.chat.current_request = { id = 1 } -- submitted, RequestStarted not yet fired
+
+  vim.api.nvim_buf_set_lines(ctx.input, 0, -1, false, { "second message" })
+  press(ctx.input, keys().send)
+
+  h.eq(#ctx.submitted, 0)
+  local stack = entry_stack(ctx.tab)
+  h.eq(#stack, 1)
+  h.eq(vim.api.nvim_buf_get_lines(stack[1].buf, 0, -1, false)[1], "second message")
+  -- The box is only cleared because the text is safely queued, not lost.
+  h.eq(vim.api.nvim_buf_get_lines(ctx.input, 0, -1, false)[1], "")
+
+  -- ...and it goes out once the request clears.
+  ctx.chat.current_request = nil
+  queue.on_chat_done(ctx.chat_bufnr)
+  h.eq(ctx.submitted[#ctx.submitted], "second message")
+end
+
+T["a flush never silently drops a message a busy chat refused"] = function()
+  local ctx = open_chat()
+  queue.on_request_started(ctx.chat_bufnr, 1)
+  enqueue(ctx, { "queued" })
+  queue.on_request_finished(ctx.chat_bufnr, 1, "success")
+
+  -- A request slipped in before the flush; the entry must survive it.
+  ctx.chat.current_request = { id = 2 }
+  queue.on_chat_done(ctx.chat_bufnr)
+  h.eq(#ctx.submitted, 0)
+  h.eq(#entry_stack(ctx.tab), 1)
 end
 
 T["hiding the chat keeps the queue and any uncommitted edit"] = function()
