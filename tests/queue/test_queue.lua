@@ -255,6 +255,48 @@ T["send-next on an idle chat submits instead of queueing"] = function()
   h.eq(#entry_stack(ctx.tab), 0)
 end
 
+-- Reordering used to close every entry window and let the next sync rebuild the
+-- stack, which flickered the whole column. The buffers move between the windows
+-- that are already open instead.
+T["promoting an entry reuses the open windows rather than rebuilding them"] = function()
+  local ctx = open_chat()
+  queue.on_request_started(ctx.chat_bufnr, 1)
+  enqueue(ctx, { "first", "second", "third" })
+
+  local before = entry_stack(ctx.tab)
+  local win_ids = { before[1].win, before[2].win, before[3].win }
+
+  press(before[3].buf, keys().steer)
+
+  local after = entry_stack(ctx.tab)
+  h.eq(#after, 3)
+  -- Same three windows, in the same screen positions.
+  h.eq({ after[1].win, after[2].win, after[3].win }, win_ids)
+  -- ...now showing the reordered queue.
+  h.eq(vim.api.nvim_buf_get_lines(after[1].buf, 0, -1, false)[1], "third")
+  h.eq(vim.api.nvim_buf_get_lines(after[2].buf, 0, -1, false)[1], "first")
+  h.eq(vim.api.nvim_buf_get_lines(after[3].buf, 0, -1, false)[1], "second")
+end
+
+-- An idle chat must still route through the queue: submitting the draft straight
+-- past the queued entries showed nothing, so the message appeared to teleport to
+-- the front of the transcript with no explanation.
+T["send-next on an idle chat with a queue still shows the promotion"] = function()
+  local ctx = open_chat()
+  queue.on_request_started(ctx.chat_bufnr, 1)
+  enqueue(ctx, { "first", "second" })
+  queue.on_request_finished(ctx.chat_bufnr, 1, "success")
+
+  vim.api.nvim_buf_set_lines(ctx.input, 0, -1, false, { "urgent" })
+  press(ctx.input, keys().steer)
+
+  h.eq(ctx.submitted[#ctx.submitted], "urgent")
+  -- The two it jumped are still queued, in their original order.
+  local stack = entry_stack(ctx.tab)
+  h.eq(#stack, 2)
+  h.eq(vim.api.nvim_buf_get_lines(stack[1].buf, 0, -1, false)[1], "first")
+end
+
 T["send-next from the input box puts the draft at the head"] = function()
   local ctx = open_chat()
   queue.on_request_started(ctx.chat_bufnr, 1)

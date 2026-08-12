@@ -811,19 +811,45 @@ local function steer_post(s, chat, text, on_sent)
   return true
 end
 
--- Move an entry to the front so it is the next thing flushed.
+-- Re-seat the entry buffers into the windows that already exist, top to bottom,
+-- so the visual stack matches flush order again after a reorder.
 --
--- Drops every entry window on the way out. `sync_entries` only creates the ones
--- that are missing -- deliberately, so an entry being edited is never rebuilt
--- under the cursor -- which means a surviving window keeps its old position and
--- the stack stops matching flush order. Rebuilding the whole stack is the only
--- thing that keeps "top of the stack goes next" true.
+-- `sync_entries` only fills in MISSING windows -- deliberately, so an entry being
+-- edited is never torn down under the cursor -- which means after a reorder every
+-- window keeps its old position and the stack silently stops matching the queue.
+-- Closing them all to force a rebuild fixes the order but flickers the entire
+-- stack; moving the buffers between the surviving windows does not. Any entry
+-- left without a window (the one just pushed) is created by the next sync.
+local function reseat_entry_windows(s)
+  local wins = {}
+  for _, e in ipairs(s.queue) do
+    if entry_win_valid(e) then
+      wins[#wins + 1] = e.winnr
+    end
+  end
+  table.sort(wins, function(a, b)
+    return vim.api.nvim_win_get_position(a)[1] < vim.api.nvim_win_get_position(b)[1]
+  end)
+  for i, e in ipairs(s.queue) do
+    local w = wins[i]
+    e.winnr = w
+    if w then
+      -- 'winfixbuf' is set on entry windows to stop a stray :b landing in one;
+      -- lift it for our own reseat.
+      vim.wo[w].winfixbuf = false
+      pcall(vim.api.nvim_win_set_buf, w, e.bufnr)
+      vim.wo[w].winfixbuf = true
+    end
+  end
+end
+
+-- Move an entry to the front so it is the next thing flushed.
 local function move_to_head(s, i)
   if i <= 1 then
     return false
   end
   table.insert(s.queue, 1, table.remove(s.queue, i))
-  close_entry_windows(s)
+  reseat_entry_windows(s)
   return true
 end
 
@@ -916,17 +942,22 @@ function steer_draft(t)
   end
 
   local mode = send_now_mode(s, chat)
-  if mode == "submit" then
-    submit_now(s, text)
-    return
-  end
-  if mode == "queue" then
-    local e = push_entry(s, t, text)
+  if mode ~= "steer" then
+    -- Through the queue even when the chat is idle and this will go out
+    -- immediately. Submitting the draft directly would jump the messages already
+    -- queued without ever showing this one as an entry -- it just vanishes from
+    -- the box and reappears in the transcript ahead of everything, with nothing
+    -- to explain why. Promoting it makes the reordering visible, and keeps this
+    -- identical to the same key pressed in an entry buffer.
+    push_entry(s, t, text)
     move_to_head(s, #s.queue)
     push_history(text)
     clear_draft_buf(s)
     sync_queue_ui(s)
-    return e
+    if mode == "submit" then
+      flush_head(s)
+    end
+    return
   end
 
   steer_post(s, chat, text, function(sent)
