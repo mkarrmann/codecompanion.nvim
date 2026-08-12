@@ -1050,6 +1050,81 @@ end
 ---posting at all.
 local INPUT_READY_TIMEOUT_MS = 10000
 
+-- Harness capabilities are server-wide, not per-session, so one cache serves
+-- every chat. Keyed by harness id; `false` marks a fetch that failed, so a dead
+-- endpoint is not retried on every keystroke.
+local harness_capabilities = nil
+
+---Populate the harness capability cache. Fire-and-forget: every caller treats a
+---missing entry as "unknown", so nothing waits on this.
+---@param callback? fun()
+function Session:fetch_harness_capabilities(callback)
+  if harness_capabilities ~= nil then
+    return callback and callback()
+  end
+  self.client:list_harnesses_async(function(harnesses)
+    harness_capabilities = {}
+    for _, h in ipairs(harnesses or {}) do
+      if h.id then
+        harness_capabilities[h.id] = h.capabilities or {}
+      end
+    end
+    if callback then
+      callback()
+    end
+  end)
+end
+
+---Whether this session's harness can inject a message into a turn that is
+---already running, as opposed to running it as the next turn.
+---
+---Three-valued on purpose. Omnigent declares a `steering` capability per
+---harness but currently populates it for none of them, and `null` there means
+---UNDECLARED, not "no" -- the neighbouring fields use explicit values ("none",
+---"jsonrpc"). Guessing from `integration_mode` would be a plausible-sounding
+---lie, so an unpopulated field stays "unknown" and callers describe only what
+---is actually guaranteed: the message is sent now rather than queued locally.
+---Note that a message was posted mid-turn, so the turn it produces belongs to
+---the user and must render as a foreground turn rather than as someone else's
+---background activity.
+---
+---A flag, not a counter: several steers posted in a row are folded into one
+---turn by every harness we have seen, and over-counting would leave a handler
+---bound waiting for a turn that never comes.
+function Session:expect_adopted_turn()
+  self._adopt_next_turn = true
+end
+
+---Consume the adoption flag. True at most once per steer.
+---@return boolean
+function Session:take_adopted_turn()
+  local adopt = self._adopt_next_turn == true
+  self._adopt_next_turn = false
+  return adopt
+end
+
+---True while a steered turn is expected but has not yet been adopted.
+---@return boolean
+function Session:adoption_pending()
+  return self._adopt_next_turn == true
+end
+
+---@return "supported"|"unsupported"|"unknown"
+function Session:steering_support()
+  local caps = harness_capabilities and self.harness and harness_capabilities[self.harness]
+  if type(caps) ~= "table" then
+    return "unknown"
+  end
+  local steering = caps.steering
+  if steering == nil then
+    return "unknown"
+  end
+  if steering == false or steering == "none" then
+    return "unsupported"
+  end
+  return "supported"
+end
+
 ---True while a posted message is sitting in the server's pending-input buffer,
 ---un-consumed by the runner.
 ---

@@ -394,6 +394,19 @@ function Client:list_hosts_async(callback)
   end)
 end
 
+---Async twin of :list_harnesses.
+---@param callback fun(harnesses: table[]|nil, err: table|nil)
+---@return table|nil request_handle
+function Client:list_harnesses_async(callback)
+  return self:request_async("get", "/v1/harnesses", nil, function(body, err)
+    if not body then
+      callback(nil, err)
+      return
+    end
+    callback(body.data or body.harnesses or {})
+  end)
+end
+
 ---@param body table
 ---@return table|nil session, table|nil err
 function Client:create_session(body)
