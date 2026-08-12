@@ -138,11 +138,23 @@ end
 ---Set the model for an omnigent adapter. If a live session runtime is supplied it
 ---is asked to patch the running session (PATCH model_override); otherwise the
 ---choice is stashed on the adapter defaults for the next session creation.
+---
+---The patch is dispatched ASYNCHRONOUSLY -- `Chat:change_model` discards this
+---return value, so blocking on it only ever bought a frozen editor. The boolean
+---therefore means "dispatched"; a rejection surfaces as a notification.
 ---@param args { adapter?: CodeCompanion.OmnigentAdapter, omnigent_session?: table, model: string }
 ---@return boolean
 function Adapter.set_model(args)
-  if args.omnigent_session and args.omnigent_session.set_model then
-    return args.omnigent_session:set_model(args.model)
+  if args.omnigent_session and args.omnigent_session.set_model_async then
+    args.omnigent_session:set_model_async(args.model, function(ok, err)
+      if not ok then
+        require("codecompanion.utils").notify(
+          "Omnigent: failed to set model: " .. ((type(err) == "table" and err.message) or "?"),
+          vim.log.levels.ERROR
+        )
+      end
+    end)
+    return true
   end
   if args.adapter then
     args.adapter.defaults = args.adapter.defaults or {}

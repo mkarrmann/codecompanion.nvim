@@ -57,17 +57,46 @@ end
 T["set_model delegates to a live session when present"] = function()
   local a = adapters.resolve("omnigent")
   local got
-  adapters.set_model({
+  -- Dispatched, not awaited: the PATCH is asynchronous and `Chat:change_model`
+  -- discards the result, so `true` here means "handed to the session".
+  local dispatched = adapters.set_model({
     adapter = a,
     model = "claude-sonnet-5",
     omnigent_session = {
-      set_model = function(_, m)
+      set_model_async = function(_, m, cb)
         got = m
-        return true
+        cb(true)
       end,
     },
   })
   h.eq(got, "claude-sonnet-5")
+  h.eq(dispatched, true)
+end
+
+T["set_model reports a rejected patch instead of swallowing it"] = function()
+  local a = adapters.resolve("omnigent")
+  local notified
+  local utils = require("codecompanion.utils")
+  local orig = utils.notify
+  utils.notify = function(msg)
+    notified = msg
+  end
+  local ok, err = pcall(function()
+    adapters.set_model({
+      adapter = a,
+      model = "claude-sonnet-5",
+      omnigent_session = {
+        set_model_async = function(_, _, cb)
+          cb(false, { message = "conflict" })
+        end,
+      },
+    })
+  end)
+  utils.notify = orig
+  if not ok then
+    error(err)
+  end
+  h.is_true(notified ~= nil and notified:find("conflict", 1, true) ~= nil)
 end
 
 T["resolve applies opts.model as model_override"] = function()
