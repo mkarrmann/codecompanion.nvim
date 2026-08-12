@@ -39,46 +39,50 @@ function SlashCommand:execute()
   local commands = require("codecompanion.interactions.chat.omnigent.commands")
   local client = commands.client_for(Chat)
 
+  -- Both round trips here -- the listing and the resume itself -- run
+  -- asynchronously, so the picker appears once the list arrives rather than the
+  -- editor freezing until it does.
   local page = (self.config.opts and self.config.opts.max_sessions) or 100
-  local list, err = client:list_sessions({ limit = page })
-  if not list then
-    return utils.notify("Failed to list Omnigent sessions: " .. (err and err.message or "?"), vim.log.levels.ERROR)
-  end
-
-  list = sessions_lib.by_recency(sessions_lib.active(list))
-  if #list == 0 then
-    return utils.notify("No Omnigent sessions found", vim.log.levels.INFO)
-  end
-
-  local choices, map = {}, {}
-  for i, s in ipairs(list) do
-    choices[i] = sessions_lib.format_summary(s)
-    map[i] = s
-  end
-
-  vim.ui.select(choices, {
-    prompt = "Resume Omnigent Session",
-    kind = "codecompanion.nvim",
-  }, function(_, idx)
-    if not idx then
-      return
+  client:list_sessions_async({ limit = page }, nil, function(list, err)
+    if not list then
+      return utils.notify("Failed to list Omnigent sessions: " .. (err and err.message or "?"), vim.log.levels.ERROR)
     end
-    local sel = map[idx]
-    local ok, rerr = Chat:resume_omnigent(sel.id)
-    if ok then
-      if sel.title and sel.title ~= "" then
-        Chat:set_title(sel.title)
+
+    list = sessions_lib.by_recency(sessions_lib.active(list))
+    if #list == 0 then
+      return utils.notify("No Omnigent sessions found", vim.log.levels.INFO)
+    end
+
+    local choices, map = {}, {}
+    for i, s in ipairs(list) do
+      choices[i] = sessions_lib.format_summary(s)
+      map[i] = s
+    end
+
+    vim.ui.select(choices, {
+      prompt = "Resume Omnigent Session",
+      kind = "codecompanion.nvim",
+    }, function(_, idx)
+      if not idx then
+        return
       end
-      utils.fire("OmnigentChatRestored", {
-        bufnr = Chat.bufnr,
-        id = Chat.id,
-        session_id = sel.id,
-        title = Chat.title,
-      })
-      utils.notify("Resumed session: " .. (sel.title or sel.id), vim.log.levels.INFO)
-    else
-      utils.notify("Failed to resume: " .. (rerr and rerr.message or "?"), vim.log.levels.ERROR)
-    end
+      local sel = map[idx]
+      Chat:resume_omnigent(sel.id, function(ok, rerr)
+        if not ok then
+          return utils.notify("Failed to resume: " .. (rerr and rerr.message or "?"), vim.log.levels.ERROR)
+        end
+        if sel.title and sel.title ~= "" then
+          Chat:set_title(sel.title)
+        end
+        utils.fire("OmnigentChatRestored", {
+          bufnr = Chat.bufnr,
+          id = Chat.id,
+          session_id = sel.id,
+          title = Chat.title,
+        })
+        utils.notify("Resumed session: " .. (sel.title or sel.id), vim.log.levels.INFO)
+      end)
+    end)
   end)
 end
 
