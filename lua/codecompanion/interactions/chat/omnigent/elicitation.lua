@@ -117,11 +117,18 @@ function M.handle(chat, session, elicitation)
     if content and next(content) then
       result.content = content
     end
-    local ok, err = session:resolve_elicitation(eid, result)
-    if not ok then
-      log:error("[Omnigent::Elicitation] resolve failed: %s", (type(err) == "table" and err.message) or tostring(err))
-      utils.notify("Omnigent: failed to resolve elicitation", vim.log.levels.ERROR)
-    end
+    -- Resolved asynchronously: the answer is only used to report a failure, and
+    -- this fires on every approve/deny, so blocking here froze the editor once
+    -- per gated tool call.
+    session:resolve_elicitation_async(eid, result, function(res, err)
+      if not res then
+        log:error("[Omnigent::Elicitation] resolve failed: %s", (type(err) == "table" and err.message) or tostring(err))
+        utils.notify("Omnigent: failed to resolve elicitation", vim.log.levels.ERROR)
+      end
+    end)
+    -- Dropped from `pending` on dispatch, not on the response: the local record
+    -- exists to stop a second prompt for the same request, and `resolved` above
+    -- already guarantees that regardless of what the server answers.
     if session.pending_elicitations then
       session.pending_elicitations[eid] = nil
     end

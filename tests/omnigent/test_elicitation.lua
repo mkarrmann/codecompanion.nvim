@@ -9,13 +9,24 @@ require("codecompanion.utils.log").error = function() end
 
 local T = new_set()
 
-local function fake_session()
+---@param opts? table { hold?: boolean } hold => the POST stays in flight until
+---  `session.release()` is called, mimicking a slow server.
+local function fake_session(opts)
+  opts = opts or {}
   return {
     pending_elicitations = { e1 = true },
     resolved = nil,
-    resolve_elicitation = function(self, eid, result)
+    resolve_elicitation_async = function(self, eid, result, callback)
       self.resolved = { eid = eid, result = result }
-      return {} -- success
+      local answer = function()
+        callback({}) -- success
+      end
+      if opts.hold then
+        self.release = answer
+      else
+        answer()
+      end
+      return { stop = function() end }
     end,
   }
 end
@@ -107,6 +118,47 @@ T["decline and cancel map to the right MCP actions"] = function()
     elicit.handle({ bufnr = 0 }, s2, { elicitation_id = "e1", params = {} })
   end)
   h.eq(s2.resolved.result.action, "cancel")
+end
+
+T["approving does not block on the server's answer"] = function()
+  -- The regression this guards: approval resolved through the SYNC transport, so
+  -- every accept/deny froze nvim's main thread for the whole round trip -- and
+  -- that fires once per gated tool call, the busiest REST path in a session.
+  local session = fake_session({ hold = true })
+  with_auto_pick(1, function()
+    elicit.handle({ bufnr = 0 }, session, { elicitation_id = "e1", params = { message = "ok?" } })
+  end)
+
+  -- Returned with the resolve still outstanding, and the prompt is already
+  -- retired so a replayed request can't ask twice while it is in flight.
+  h.eq(type(session.release), "function")
+  h.eq(session.resolved.result.action, "accept")
+  h.eq(session.pending_elicitations.e1, nil)
+
+  session.release()
+end
+
+T["a failed resolve reports without throwing"] = function()
+  local notified
+  local utils = require("codecompanion.utils")
+  local orig = utils.notify
+  utils.notify = function(msg)
+    notified = msg
+  end
+  local session = fake_session()
+  session.resolve_elicitation_async = function(_, _, _, callback)
+    callback(nil, { message = "boom" })
+  end
+  local ok, err = pcall(function()
+    with_auto_pick(1, function()
+      elicit.handle({ bufnr = 0 }, session, { elicitation_id = "e1", params = {} })
+    end)
+  end)
+  utils.notify = orig
+  if not ok then
+    error(err)
+  end
+  h.is_true(notified ~= nil and notified:find("failed to resolve", 1, true) ~= nil)
 end
 
 T["handle without an id does not throw"] = function()
