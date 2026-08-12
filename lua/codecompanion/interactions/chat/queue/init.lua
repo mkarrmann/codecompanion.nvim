@@ -215,7 +215,7 @@ local function create_entry_buf(t, entry)
   end, { buffer = buf, desc = "Drop this queued message" })
   vim.keymap.set({ "n", "i" }, keys.steer, function()
     steer_entry(t, id)
-  end, { buffer = buf, desc = "Steer: send this message into the running turn now" })
+  end, { buffer = buf, desc = "Send this message now, ahead of the queue" })
 
   return buf
 end
@@ -241,6 +241,22 @@ end
 local QUEUED_HL = "Normal:CCQueuedNormal,EndOfBuffer:CCQueuedNormal,WinSeparator:CCQueuedBorder"
 local HELD_HL = "Normal:CCHeldNormal,EndOfBuffer:CCHeldNormal,WinSeparator:CCHeldBorder"
 
+-- What the steer key is honestly offering, which depends on the harness.
+--
+-- Only "send it now instead of waiting your turn in the queue" is guaranteed:
+-- whether the agent is interrupted mid-thought or picks the message up as its
+-- next turn is the harness's business, and omnigent declares a `steering`
+-- capability that (today) no harness populates. Promising interruption when the
+-- harness cannot deliver it is how you end up mistrusting the whole affordance.
+local function steer_verb(s)
+  local chat = s.chat_bufnr and require("codecompanion").buf_get_chat(s.chat_bufnr)
+  local session = chat and chat.omnigent_session
+  if session and session.steering_support and session:steering_support() == "supported" then
+    return "steer"
+  end
+  return "send now"
+end
+
 local function paint_entry_labels(s)
   local hold = hold_index(s)
   local n = #s.queue
@@ -250,12 +266,13 @@ local function paint_entry_labels(s)
       local label, hl
       if entry_dirty(e) then
         label = string.format(
-          "%%#DiagnosticWarn# ✎ %d/%d editing %%#Comment#— %s commit · %s drop · %s steer%%*",
+          "%%#DiagnosticWarn# ✎ %d/%d editing %%#Comment#— %s commit · %s drop · %s %s%%*",
           i,
           n,
           keys.commit,
           keys.drop,
-          keys.steer
+          keys.steer,
+          steer_verb(s)
         )
         hl = HELD_HL
       elseif hold and i > hold then
@@ -859,7 +876,7 @@ local function create_input_buf(t)
   end, { buffer = buf, desc = "Jump to the newest queued message" })
   vim.keymap.set({ "n", "i" }, keys.steer, function()
     steer_draft(t)
-  end, { buffer = buf, desc = "Steer: send the draft into the running turn now" })
+  end, { buffer = buf, desc = "Send the draft now, ahead of the queue" })
 
   -- Edge-triggered history navigation: the history keys browse prompt history
   -- only at the first/last line, and otherwise fall through to ordinary cursor
