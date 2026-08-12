@@ -581,8 +581,9 @@ end
 ---it would leave a steer invisible on every non-native harness.
 ---@param chat table
 ---@param text string
----@return boolean ok, string? err
-function OmnigentHandler.steer(chat, text)
+---@param on_result? fun(ok: boolean, err?: string) Fires when the POST settles
+---@return boolean accepted, string? err
+function OmnigentHandler.steer(chat, text, on_result)
   local session = chat and chat.omnigent_session
   if not (session and session.post_message_async) then
     return false, "no omnigent session on this chat"
@@ -612,31 +613,33 @@ function OmnigentHandler.steer(chat, text)
     render.note_local_user_echo(chat, text, wire)
 
     if reason == "timeout" or reason == "turn_ended" then
-      log:warn("[Omnigent::Handler] steering without a running turn to steer (%s)", reason)
+      log:warn("[Omnigent::Handler] posting a steer with no live turn to fold it into (%s)", reason)
     end
 
     session:post_message_async(wire, function(res, perr)
-      if not res then
-        local msg = type(perr) == "table" and (perr.message or vim.inspect(perr)) or tostring(perr)
-        log:error("[Omnigent::Handler] steer failed: %s", msg)
-        chat:add_buf_message(
-          { role = C.LLM_ROLE, content = "\n> [!WARNING] Steer failed: " .. msg .. "\n" },
-          { type = MT.SYSTEM_MESSAGE or MT.LLM_MESSAGE }
-        )
+      if res then
+        return on_result and on_result(true)
+      end
+      local msg = type(perr) == "table" and (perr.message or vim.inspect(perr)) or tostring(perr)
+      log:error("[Omnigent::Handler] steer failed: %s", msg)
+      chat:add_buf_message(
+        { role = C.LLM_ROLE, content = "\n> [!WARNING] Steer failed: " .. msg .. "\n" },
+        { type = MT.SYSTEM_MESSAGE or MT.LLM_MESSAGE }
+      )
+      if on_result then
+        on_result(false, msg)
       end
     end)
   end
 
-  -- Hold until the previous message has actually been picked up by the runner.
-  -- Posting into an un-consumed pending input does not steer -- the server
-  -- hands the runner one combined input and the agent never sees two messages.
+  -- Hold until a POST would actually be forwarded into the running turn (see
+  -- `Session:steerable_now`). Sending in the gap between "turn started" and
+  -- "response streaming" is the whole bug: the runner buffers it and the agent
+  -- takes it as a follow-up turn instead of folding it into what it is doing.
+  --
   -- Renders at post time, not now, so a message in the transcript always means
   -- the agent received it.
-  if session.when_input_ready then
-    session:when_input_ready(post)
-  else
-    post("ready")
-  end
+  session:when_steerable(post)
   return true
 end
 

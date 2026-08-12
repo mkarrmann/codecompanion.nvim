@@ -654,7 +654,7 @@ end
 function Session:_apply_state(u)
   -- Before the per-kind fold: a deferred steer is waiting on exactly these
   -- signals, and `input_consumed` is also handled below for a different reason.
-  self:_maybe_release_input(u.kind)
+  self:_maybe_release_steer(u.kind)
 
   if u.kind == "status" then
     self.status = u.status or self.status
@@ -1044,11 +1044,10 @@ function Session:post_message_async(text, callback)
   end)
 end
 
----How long to hold a steer waiting for the previous input to be consumed.
----Generous: the runner normally picks input up in well under a second, so
----reaching this means something unusual happened and posting late beats not
----posting at all.
-local INPUT_READY_TIMEOUT_MS = 10000
+---How long to hold a steer waiting for the gate to open. Generous: a response
+---normally starts streaming in well under a second, so reaching this means
+---something unusual happened and posting late beats not posting at all.
+local STEER_WAIT_TIMEOUT_MS = 10000
 
 -- Harness capabilities are server-wide, not per-session, so one cache serves
 -- every chat. Keyed by harness id; `false` marks a fetch that failed, so a dead
@@ -1084,133 +1083,174 @@ end
 ---"jsonrpc"). Guessing from `integration_mode` would be a plausible-sounding
 ---lie, so an unpopulated field stays "unknown" and callers describe only what
 ---is actually guaranteed: the message is sent now rather than queued locally.
----Note that a message was posted mid-turn, so the turn it produces belongs to
----the user and must render as a foreground turn rather than as someone else's
----background activity.
+-- Harnesses whose steer is folded into the RUNNING turn, rather than queued and
+-- served at the next turn boundary.
+--
+-- This has to be an evidence table rather than a rule. Omnigent declares a
+-- `steering` capability per harness and populates it for none of them, and its
+-- own docs/QUEUE_STEER_DESIGN.md is self-contradictory: the per-harness table
+-- claims "live injection, deterministic" for claude-sdk / codex-sdk, while the
+-- prose two paragraphs down says the SDK path "surfaces it at its next
+-- turn-boundary". Live runs settle it -- the prose is right.
+--
+-- Measured with tests/omnigent/live_smoke_steer.lua, which sends a marker word
+-- mid-response and checks whether it comes back inside the response that was
+-- already streaming:
+--
+--   codex-native   PASS -- verified here, twice (explicit `turn/steer` RPC)
+--   claude-native  assumed -- verified in omnigent's own doc, not by us
+--   claude-sdk     FAIL -- second response, marker absent
+--   codex          FAIL -- second response, marker absent
+--
+-- Everything else is treated as non-injecting, including the harnesses whose doc
+-- row reads "mechanism confirmed in code, not yet verified live". Guessing wrong
+-- in that direction is free: the caller falls back to queueing, which is always
+-- correct. Guessing wrong the other way is what produced a steer that silently
+-- became a follow-up turn.
+local INJECTS_MID_TURN = {
+  ["codex-native"] = true,
+  ["claude-native"] = true,
+}
+
+---Whether steering this session means anything: will a message posted mid-turn
+---be folded into it, or merely served as the next turn?
 ---
----A flag, not a counter: several steers posted in a row are folded into one
----turn by every harness we have seen, and over-counting would leave a handler
----bound waiting for a turn that never comes.
-function Session:expect_adopted_turn()
-  self._adopt_next_turn = true
-end
-
----Consume the adoption flag. True at most once per steer.
----@return boolean
-function Session:take_adopted_turn()
-  local adopt = self._adopt_next_turn == true
-  self._adopt_next_turn = false
-  return adopt
-end
-
----True while a steered turn is expected but has not yet been adopted.
----@return boolean
-function Session:adoption_pending()
-  return self._adopt_next_turn == true
-end
-
+---Prefers the server's own declaration so this self-corrects the moment omnigent
+---starts populating `capabilities.steering`, and falls back to what has actually
+---been measured.
 ---@return "supported"|"unsupported"|"unknown"
 function Session:steering_support()
   local caps = harness_capabilities and self.harness and harness_capabilities[self.harness]
-  if type(caps) ~= "table" then
+  local declared = type(caps) == "table" and caps.steering or nil
+  if declared ~= nil then
+    return (declared == false or declared == "none") and "unsupported" or "supported"
+  end
+  if not self.harness then
     return "unknown"
   end
-  local steering = caps.steering
-  if steering == nil then
-    return "unknown"
-  end
-  if steering == false or steering == "none" then
-    return "unsupported"
-  end
-  return "supported"
+  return INJECTS_MID_TURN[self.harness] and "supported" or "unsupported"
+end
+
+---True when posting mid-turn actually steers. Callers that cannot steer should
+---queue the message instead of posting it out of band -- an out-of-band post on
+---a non-injecting harness buys a few hundred milliseconds and costs the whole
+---foreground render path.
+---@return boolean
+function Session:can_steer()
+  return self:steering_support() == "supported"
 end
 
 ---True while a posted message is sitting in the server's pending-input buffer,
 ---un-consumed by the runner.
 ---
----Only native-terminal harnesses (claude-native / codex-native) park input this
----way -- they are the ones that answer a post with a `pending_id` -- so this is
----false throughout on the SDK harnesses, which is correct: they have no such
----buffer to merge into.
+---Only native-terminal harnesses park input this way -- they are the ones that
+---answer a post with a `pending_id` -- so this is false throughout on the SDK
+---harnesses, which is correct: they have no such buffer to merge into.
 ---@return boolean
 function Session:input_pending()
   return self._input_pending == true
 end
 
----Run `fn` once the server has no un-consumed input left, i.e. once a message
----posted now would reach a *running* turn rather than joining the batch that
----has yet to start one.
+---Would a message POSTed right now be delivered INTO the running turn?
 ---
----This is what separates steering from editing your own prompt. Both are the
----same POST -- omnigent has no steer flag -- so the only thing that decides
----whether a message interrupts the agent or is silently concatenated onto the
----previous one is whether the runner has picked the previous one up yet.
+---This mirrors the runner's own gate. From `omnigent/runner/app.py`:
 ---
----`fn` is called synchronously when nothing is pending, so the common case adds
----no latency. `reason` says why it ran: "ready" (nothing was pending),
----"consumed" (the runner took the previous input), "turn_ended" (the turn died
----first, so the wait can never be satisfied), or "timeout".
+---    _can_forward = (not _native
+---                    and not _awaiting_approval
+---                    and conversation_id in _live_response_id)
+---
+---and `_live_response_id[conv]` is set when `response.created` arrives. Fail any
+---of those and the POST is merely buffered -- the agent picks the message up as
+---its NEXT turn instead of folding it into this one. That is the whole bug: a
+---message sent in the window between "turn started" and "response streaming"
+---looks like a steer and behaves like a follow-up.
+---
+---The client mirrors each condition with state it already tracks:
+---  * `_input_pending`      -- the native pending-input buffer
+---  * `current_response_id` -- set by `open_turn` on `response.created`
+---  * `pending_elicitations` -- an approval the runner is parked on
+---@return boolean ready, string? reason_not_ready
+function Session:steerable_now()
+  if self._input_pending then
+    return false, "input_pending"
+  end
+  if next(self.pending_elicitations or {}) ~= nil then
+    return false, "awaiting_approval"
+  end
+  if not self.reducer.current_response_id then
+    return false, "no_live_response"
+  end
+  return true
+end
+
+---Run `fn` once a POST would actually reach the running turn, per
+---`steerable_now`. Callers should only reach here while the session is busy: an
+---idle session has no turn to steer into, and the message should go out through
+---the ordinary submit path instead.
+---
+---`fn` is called synchronously when the session is already steerable, so the
+---common case adds no latency. `reason` says why it ran: "ready", "live" (a
+---response started), "turn_ended" (no turn left to steer into) or "timeout".
+---Every path posts -- holding the text hostage to an event that may never
+---arrive is worse than delivering it a turn late.
 ---@param fn fun(reason: string)
-function Session:when_input_ready(fn)
-  if not self._input_pending then
+function Session:when_steerable(fn)
+  if self:steerable_now() then
     return fn("ready")
   end
   local waiter = { fn = fn }
-  self._input_waiters = self._input_waiters or {}
-  table.insert(self._input_waiters, waiter)
+  self._steer_waiters = self._steer_waiters or {}
+  table.insert(self._steer_waiters, waiter)
   vim.defer_fn(function()
-    if waiter.fired then
-      return
-    end
-    -- Give up tracking rather than hold the text hostage to an event that may
-    -- never arrive. Worst case the post merges, which is where we started.
-    self._input_pending = false
-    self:_fire_input_waiter(waiter, "timeout")
-  end, INPUT_READY_TIMEOUT_MS)
+    self:_fire_steer_waiter(waiter, "timeout")
+  end, STEER_WAIT_TIMEOUT_MS)
 end
 
 ---@param waiter table
 ---@param reason string
-function Session:_fire_input_waiter(waiter, reason)
+function Session:_fire_steer_waiter(waiter, reason)
   if waiter.fired then
     return
   end
   waiter.fired = true
-  for i, w in ipairs(self._input_waiters or {}) do
+  for i, w in ipairs(self._steer_waiters or {}) do
     if w == waiter then
-      table.remove(self._input_waiters, i)
+      table.remove(self._steer_waiters, i)
       break
     end
   end
   waiter.fn(reason)
 end
 
----Release waiters on any signal that the pending input is gone -- consumed by
----the runner, or moot because the turn it belonged to ended.
+---Re-evaluate the steer gate after any update that could have opened it, and
+---release everything waiting once it has. Detaches the list first: a waiter is
+---free to post, which can close the gate again and enqueue the next one.
 ---@param kind string
-function Session:_maybe_release_input(kind)
-  if not self._input_pending and not self._input_waiters then
-    return
-  end
+function Session:_maybe_release_steer(kind)
+  -- Track the native pending-input buffer regardless of whether anything is
+  -- waiting: `steerable_now` reads it, and a flag left set would shut the gate
+  -- on every later steer.
   if kind == "input_consumed" then
-    return self:_release_input_waiters("consumed")
+    self._input_pending = false
+  elseif kind == "turn_completed" or kind == "turn_failed" or kind == "turn_cancelled" or kind == "interrupted" then
+    self._input_pending = false
   end
-  if kind == "turn_completed" or kind == "turn_failed" or kind == "turn_cancelled" or kind == "interrupted" then
-    self:_release_input_waiters("turn_ended")
-  end
-end
 
----Clear the pending-input flag and run everything waiting on it. Detaches the
----list first: a waiter is free to post, which can re-arm the flag and enqueue
----the next one.
----@param reason string
-function Session:_release_input_waiters(reason)
-  self._input_pending = false
-  local waiters = self._input_waiters
-  if not waiters then
+  if not self._steer_waiters then
     return
   end
-  self._input_waiters = nil
+  local reason
+  if kind == "turn_completed" or kind == "turn_failed" or kind == "turn_cancelled" or kind == "interrupted" then
+    -- No turn left to steer into. Post anyway; it becomes the next turn, which
+    -- is where the message was headed regardless.
+    reason = "turn_ended"
+  elseif self:steerable_now() then
+    reason = "live"
+  else
+    return
+  end
+  local waiters = self._steer_waiters
+  self._steer_waiters = nil
   for _, waiter in ipairs(waiters) do
     if not waiter.fired then
       waiter.fired = true

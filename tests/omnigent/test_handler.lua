@@ -419,6 +419,7 @@ end
 T["steer posts into the running turn and renders it"] = function()
   local chat, handler, cap = setup({})
   handler:submit({})
+  chat.omnigent_session.reducer.current_response_id = "resp_1"
   cap.event = nil
 
   local ok, err = OmnigentHandler.steer(chat, "actually, use tabs")
@@ -445,6 +446,7 @@ end
 T["steer opens its own user block instead of appending to the last one"] = function()
   local chat, handler = setup({})
   handler:submit({})
+  chat.omnigent_session.reducer.current_response_id = "resp_1"
   OmnigentHandler.steer(chat, "actually, use tabs")
   h.eq(chat.buf_calls[#chat.buf_calls].force_role, true)
 end
@@ -459,7 +461,7 @@ end
 -- Posting into an un-consumed pending input does not steer: the server hands
 -- the runner one combined input, so the agent never sees two messages. This is
 -- exactly the "submit, then immediately steer" case.
-T["steer waits for the pending input to be consumed before posting"] = function()
+T["steer waits for a live response before posting"] = function()
   local chat, handler, cap = setup({ pending = "pi_1" })
   handler:submit({})
   cap.event = nil
@@ -472,12 +474,18 @@ T["steer waits for the pending input to be consumed before posting"] = function(
   h.eq(#chat.buf_calls, before)
 
   chat.omnigent_session:_apply_state({ kind = "input_consumed", item_id = "msg_1" })
+  -- Input consumed is not enough on its own: the runner only forwards once a
+  -- response is live (`_live_response_id`), so the gate is still shut.
+  h.eq(cap.event, nil)
+
+  chat.omnigent_session.reducer.current_response_id = "resp_1"
+  chat.omnigent_session:_apply_state({ kind = "turn_started", response_id = "resp_1" })
   h.eq(vim.json.decode(cap.event.body).data.content[1].text, "actually, use tabs")
   h.eq(chat.buf_calls[#chat.buf_calls].content, "actually, use tabs")
 end
 
 T["a turn ending releases a steer that was still waiting"] = function()
-  local chat, handler, cap = setup({ pending = "pi_1" })
+  local chat, handler, cap = setup({})
   handler:submit({})
   cap.event = nil
 
@@ -489,35 +497,49 @@ T["a turn ending releases a steer that was still waiting"] = function()
   h.eq(vim.json.decode(cap.event.body).data.content[1].text, "actually, use tabs")
 end
 
-T["a second steer waits behind the first"] = function()
-  local chat, handler, cap = setup({ pending = "pi_1" })
-  handler:submit({})
-
-  OmnigentHandler.steer(chat, "one")
-  chat.omnigent_session:_apply_state({ kind = "input_consumed", item_id = "msg_1" })
-  h.eq(vim.json.decode(cap.event.body).data.content[1].text, "one")
-
-  cap.event = nil
-  OmnigentHandler.steer(chat, "two")
-  h.eq(cap.event, nil)
-  chat.omnigent_session:_apply_state({ kind = "input_consumed", item_id = "msg_2" })
-  h.eq(vim.json.decode(cap.event.body).data.content[1].text, "two")
-end
-
-T["steer posts straight away when nothing is pending"] = function()
+-- An approval parks the runner: `_can_forward` requires `not _awaiting_approval`,
+-- so a steer sent now would be buffered to the next turn rather than folded in.
+T["steer waits while an approval is outstanding"] = function()
   local chat, handler, cap = setup({})
   handler:submit({})
+  local sess = chat.omnigent_session
+  sess.reducer.current_response_id = "resp_1"
+  sess.pending_elicitations = { e1 = {} }
   cap.event = nil
-  -- No pending_id in the response means an SDK harness: no pending-input buffer
-  -- exists to merge into, so there is nothing to wait for.
-  h.eq(chat.omnigent_session:input_pending(), false)
+
+  OmnigentHandler.steer(chat, "actually, use tabs")
+  h.eq(cap.event, nil)
+
+  sess.pending_elicitations = {}
+  sess:_apply_state({ kind = "elicitation_resolved", elicitation_id = "e1" })
+  h.eq(vim.json.decode(cap.event.body).data.content[1].text, "actually, use tabs")
+end
+
+T["steer posts straight away once a response is live"] = function()
+  local chat, handler, cap = setup({})
+  handler:submit({})
+  chat.omnigent_session.reducer.current_response_id = "resp_1"
+  cap.event = nil
+  h.eq(chat.omnigent_session:steerable_now(), true)
   OmnigentHandler.steer(chat, "actually, use tabs")
   h.eq(vim.json.decode(cap.event.body).data.content[1].text, "actually, use tabs")
+end
+
+T["steer reports the POST outcome to its caller"] = function()
+  local chat, handler = setup({})
+  handler:submit({})
+  chat.omnigent_session.reducer.current_response_id = "resp_1"
+  local got
+  OmnigentHandler.steer(chat, "actually, use tabs", function(ok)
+    got = ok
+  end)
+  h.eq(got, true)
 end
 
 T["steer rewrites an agent command on the wire only"] = function()
   local chat, handler, cap = setup({})
   handler:submit({})
+  chat.omnigent_session.reducer.current_response_id = "resp_1"
   OmnigentHandler.steer(chat, "\\compact")
   h.eq(vim.json.decode(cap.event.body).data.content[1].text, "/compact")
   -- The transcript keeps what the user actually typed.
@@ -527,6 +549,7 @@ end
 T["a steered message is not re-rendered when it mirrors back"] = function()
   local chat, handler = setup({})
   handler:submit({})
+  chat.omnigent_session.reducer.current_response_id = "resp_1"
   OmnigentHandler.steer(chat, "\\compact")
   local before = #chat.buf_calls
   -- Both forms of the echo are suppressed: the mirror carries what the agent
