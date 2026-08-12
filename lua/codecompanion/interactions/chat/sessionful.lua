@@ -49,4 +49,36 @@ function M.is_sessionful(chat)
   return M.for_chat(chat) ~= nil
 end
 
+---The sessionful family of a chat: "omnigent" | "acp" | nil (e.g. plain http).
+---
+---Broader than `is_sessionful`, which only answers for families that have a
+---migrated controller. ACP chats are durable too, they just still run through
+---the per-family branches in chat/init.lua.
+---@param chat CodeCompanion.Chat|nil
+---@return string|nil
+function M.kind(chat)
+  local t = chat and chat.adapter and chat.adapter.type
+  if t == "omnigent" or t == "acp" then
+    return t
+  end
+  return nil
+end
+
+---Resolve the durable session id for a chat, across adapter families.
+---
+---The UI layer (status line, usage cache, winbar pin) needs one lookup that
+---works for any durable chat; without this each of them re-implements the
+---family branch and quietly misses whichever family it was not written for.
+---@param chat CodeCompanion.Chat|nil
+---@return string|nil
+function M.session_id(chat)
+  local t = M.kind(chat)
+  if t == "omnigent" then
+    return chat.omnigent_session_id or (chat.omnigent_session and chat.omnigent_session.session_id)
+  elseif t == "acp" then
+    return chat.acp_session_id or (chat.acp_connection and chat.acp_connection.session_id)
+  end
+  return nil
+end
+
 return M
